@@ -1,11 +1,44 @@
 "use client";
 
-import { Building2, ArrowRight } from "lucide-react";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { Building2, ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { organization } from "@/lib/auth-client";
 
 export default function OnboardingSetupPage() {
+  const router = useRouter();
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+
+    const formData = new FormData(e.currentTarget);
+    const orgName = formData.get("orgName") as string;
+    const slug = orgName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+
+    const { error: orgError } = await organization.create({
+      name: orgName,
+      slug,
+    });
+
+    if (orgError) {
+      setError(orgError.message || "Failed to create organisation.");
+      setLoading(false);
+      return;
+    }
+
+    router.push("/dashboard");
+  }
+
   return (
     <div className="space-y-8">
       <div className="space-y-2 text-center">
@@ -18,11 +51,18 @@ export default function OnboardingSetupPage() {
         </p>
       </div>
 
-      <form className="space-y-6">
+      {error && (
+        <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {error}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-6">
         <div className="space-y-2">
           <Label htmlFor="orgName">Organisation name</Label>
           <Input
             id="orgName"
+            name="orgName"
             placeholder="e.g., Skcript Technologies"
             required
           />
@@ -35,6 +75,7 @@ export default function OnboardingSetupPage() {
           <Label htmlFor="orgSize">Team size</Label>
           <select
             id="orgSize"
+            name="orgSize"
             className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <option value="1-5">1-5 people</option>
@@ -48,6 +89,7 @@ export default function OnboardingSetupPage() {
           <Label htmlFor="role">Your role</Label>
           <select
             id="role"
+            name="role"
             className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <option value="marketing">Marketing</option>
@@ -58,7 +100,8 @@ export default function OnboardingSetupPage() {
           </select>
         </div>
 
-        <Button type="submit" className="w-full">
+        <Button type="submit" className="w-full" disabled={loading}>
+          {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Create Organisation <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </form>
