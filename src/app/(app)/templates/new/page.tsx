@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Save,
@@ -25,12 +26,14 @@ import {
   Undo,
   Redo,
 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { createTemplate } from "@/lib/actions/templates";
 
 const toolbarButtons = [
   { icon: Undo, label: "Undo" },
@@ -57,14 +60,42 @@ const toolbarButtons = [
 ] as const;
 
 export default function NewTemplatePage() {
+  const router = useRouter();
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">(
     "desktop"
   );
+  const [templateName, setTemplateName] = useState("");
+  const [subject, setSubject] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [showPreview, setShowPreview] = useState(true);
+  const editorRef = useRef<HTMLDivElement>(null);
+
+  async function handleSave() {
+    if (!templateName.trim()) {
+      alert("Please enter a template name");
+      return;
+    }
+    setSaving(true);
+    try {
+      const contentHtml = editorRef.current?.innerHTML || "";
+      const template = await createTemplate({
+        name: templateName.trim(),
+        subject: subject.trim(),
+        contentHtml,
+      });
+      router.push("/templates");
+    } catch (err) {
+      console.error("Failed to save template:", err);
+      alert("Failed to save template");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
           <Link href="/templates">
             <Button variant="ghost" size="icon">
@@ -72,18 +103,19 @@ export default function NewTemplatePage() {
             </Button>
           </Link>
           <div>
-            <h1 className="text-2xl font-bold">Template Editor</h1>
+            <h1 className="text-xl sm:text-2xl font-bold">Template Editor</h1>
             <p className="text-sm text-muted-foreground">
               Design your email template
             </p>
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline">
-            <Eye className="mr-2 h-4 w-4" /> Preview
+          <Button variant="outline" size="sm" className="sm:size-default" onClick={() => setShowPreview(!showPreview)}>
+            <Eye className="mr-2 h-4 w-4" /> <span className="hidden sm:inline">{showPreview ? "Hide Preview" : "Show Preview"}</span><span className="sm:hidden">Preview</span>
           </Button>
-          <Button>
-            <Save className="mr-2 h-4 w-4" /> Save Template
+          <Button size="sm" className="sm:size-default" onClick={handleSave} disabled={saving}>
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+            Save
           </Button>
         </div>
       </div>
@@ -94,13 +126,20 @@ export default function NewTemplatePage() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="templateName">Template Name</Label>
-              <Input id="templateName" placeholder="e.g., Q2 Launch Template" />
+              <Input
+                id="templateName"
+                placeholder="e.g., Q2 Launch Template"
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="subject">Default Subject Line</Label>
               <Input
                 id="subject"
                 placeholder="e.g., Exciting news from Skcript"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
               />
             </div>
           </div>
@@ -108,7 +147,7 @@ export default function NewTemplatePage() {
       </Card>
 
       {/* Editor area */}
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className={`grid gap-6 ${showPreview ? "lg:grid-cols-2" : "lg:grid-cols-1"}`}>
         {/* Editor */}
         <Card className="flex flex-col">
           <div className="border-b p-2">
@@ -134,6 +173,7 @@ export default function NewTemplatePage() {
             {/* TipTap editor placeholder */}
             <div className="min-h-[400px] space-y-4">
               <div
+                ref={editorRef}
                 contentEditable
                 suppressContentEditableWarning
                 className="min-h-[400px] outline-none"
@@ -157,7 +197,7 @@ export default function NewTemplatePage() {
         </Card>
 
         {/* Preview */}
-        <Card className="flex flex-col">
+        {showPreview && <Card className="flex flex-col">
           <div className="flex items-center justify-between border-b p-3">
             <p className="text-sm font-medium">Preview</p>
             <Tabs
@@ -179,7 +219,7 @@ export default function NewTemplatePage() {
           <CardContent className="flex flex-1 items-start justify-center overflow-auto bg-muted/50 p-6">
             <div
               className={`rounded-lg border bg-white p-8 shadow-sm dark:bg-card ${
-                previewMode === "mobile" ? "w-[375px]" : "w-full max-w-[600px]"
+                previewMode === "mobile" ? "max-w-[375px] w-full" : "w-full max-w-[600px]"
               }`}
             >
               <h1 className="text-2xl font-bold text-foreground">
@@ -210,7 +250,7 @@ export default function NewTemplatePage() {
               </div>
             </div>
           </CardContent>
-        </Card>
+        </Card>}
       </div>
     </div>
   );

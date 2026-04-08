@@ -11,7 +11,7 @@ import {
 } from "../db-schema";
 import { eq, and, desc, sql, inArray } from "drizzle-orm";
 import { requireSession } from "./auth-helpers";
-import { sendCampaignEmail } from "../email";
+import { enqueueEmailJobs, type EmailJobData } from "../queue/email-queue";
 
 export async function getCampaigns() {
   const ctx = await requireSession();
@@ -53,6 +53,15 @@ export async function getCampaignStats(campaignId: string) {
 }
 
 export async function getCampaignRecipients(campaignId: string) {
+  const ctx = await requireSession();
+  // Verify campaign belongs to this org
+  const campaign = await db
+    .select({ id: campaigns.id })
+    .from(campaigns)
+    .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, ctx.orgId)))
+    .limit(1);
+  if (campaign.length === 0) throw new Error("Campaign not found");
+
   const rows = await db
     .select({
       id: campaignRecipients.id,
@@ -81,6 +90,14 @@ export async function getCampaignRecipients(campaignId: string) {
 }
 
 export async function getCampaignOrgRollup(campaignId: string) {
+  const ctx = await requireSession();
+  const campaign = await db
+    .select({ id: campaigns.id })
+    .from(campaigns)
+    .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, ctx.orgId)))
+    .limit(1);
+  if (campaign.length === 0) throw new Error("Campaign not found");
+
   const rows = await db
     .select({
       company: recipients.company,
@@ -98,6 +115,14 @@ export async function getCampaignOrgRollup(campaignId: string) {
 }
 
 export async function getCampaignTimeline(campaignId: string) {
+  const ctx = await requireSession();
+  const campaign = await db
+    .select({ id: campaigns.id })
+    .from(campaigns)
+    .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, ctx.orgId)))
+    .limit(1);
+  if (campaign.length === 0) throw new Error("Campaign not found");
+
   const rows = await db
     .select({
       hour: sql<string>`date_trunc('hour', ${campaignEvents.createdAt})`,
@@ -128,6 +153,8 @@ export async function createCampaign(data: {
 }) {
   const ctx = await requireSession();
 
+  console.log(`[Campaign] Creating campaign "${data.name}" for org ${ctx.orgId}`);
+
   // Create the campaign
   const [campaign] = await db
     .insert(campaigns)
@@ -149,6 +176,8 @@ export async function createCampaign(data: {
     })
     .returning();
 
+  console.log(`[Campaign] Campaign created: ${campaign.id}`);
+
   // Get all recipients from the selected lists
   const recipientRows = await db
     .select()
@@ -161,10 +190,12 @@ export async function createCampaign(data: {
       )
     );
 
+  console.log(`[Campaign] Found ${recipientRows.length} active recipients from ${data.recipientListIds.length} list(s)`);
+
   // Create campaign_recipients entries
   if (recipientRows.length > 0) {
     await db.insert(campaignRecipients).values(
-      recipientRows.map((r) => ({
+      recipientRows.map((r: { id: string }) => ({
         campaignId: campaign.id,
         recipientId: r.id,
         status: "pending" as const,
@@ -197,17 +228,33 @@ export async function createCampaign(data: {
     metadata: { name: data.name, recipients: recipientRows.length },
   });
 
+  console.log(`[Campaign] Campaign "${data.name}" ready with ${recipientRows.length} recipients`);
   return campaign;
 }
 
 export async function sendCampaign(campaignId: string) {
   const ctx = await requireSession();
+  console.log(`[Send] Starting send for campaign ${campaignId}`);
 
   // Get campaign details
   const campaign = await getCampaign(campaignId);
-  if (!campaign) throw new Error("Campaign not found");
+  if (!campaign) {
+    console.error(`[Send] Campaign ${campaignId} not found`);
+    throw new Error("Campaign not found");
+  }
+
+  console.log(`[Send] Campaign "${campaign.name}" status: ${campaign.status}`);
+
+  // Guard against double-send
+  if (campaign.status === "sending" || campaign.status === "sent") {
+    console.warn(`[Send] Blocked: campaign ${campaignId} is already "${campaign.status}"`);
+    throw new Error(
+      `Campaign is already ${campaign.status}. Cannot send again.`
+    );
+  }
 
   // Mark campaign as sending
+  console.log(`[Send] Marking campaign ${campaignId} as "sending"`);
   await db
     .update(campaigns)
     .set({ status: "sending", sentAt: new Date() })
@@ -230,74 +277,39 @@ export async function sendCampaign(campaignId: string) {
       )
     );
 
-  let sentCount = 0;
-  let failedCount = 0;
+  console.log(`[Send] Found ${pendingRecipients.length} pending recipients`);
+
+  if (pendingRecipients.length === 0) {
+    console.log(`[Send] No pending recipients — marking campaign as "sent"`);
+    await db
+      .update(campaigns)
+      .set({ status: "sent" })
+      .where(eq(campaigns.id, campaignId));
+    return { enqueued: 0 };
+  }
+
   const fromAddress = campaign.fromName
     ? `${campaign.fromName} <${campaign.fromEmail}>`
     : campaign.fromEmail;
 
-  // Send emails via Resend (sequentially to respect rate limits)
-  for (const recipient of pendingRecipients) {
-    try {
-      const resendEmailId = await sendCampaignEmail({
-        to: recipient.email,
-        from: fromAddress,
-        replyTo: campaign.replyTo || undefined,
-        subject: campaign.subject,
-        html: campaign.contentHtml || "<p>No content</p>",
-        campaignId,
-        recipientId: recipient.recipientId,
-        recipientEmail: recipient.email,
-        orgId: ctx.orgId,
-      });
+  // Build job data for each recipient
+  const jobs: EmailJobData[] = pendingRecipients.map((r: typeof pendingRecipients[number]) => ({
+    campaignId,
+    recipientId: r.recipientId,
+    crId: r.crId,
+    email: r.email,
+    firstName: r.firstName,
+    fromAddress,
+    replyTo: campaign.replyTo,
+    subject: campaign.subject,
+    contentHtml: campaign.contentHtml || "<p>No content</p>",
+    orgId: ctx.orgId,
+  }));
 
-      // Mark as sent and store Resend email ID
-      await db
-        .update(campaignRecipients)
-        .set({
-          status: "sent",
-          sentAt: new Date(),
-          resendEmailId,
-        })
-        .where(eq(campaignRecipients.id, recipient.crId));
-
-      await db.insert(campaignEvents).values({
-        campaignId,
-        recipientId: recipient.recipientId,
-        eventType: "sent",
-        eventData: { resendEmailId },
-      });
-
-      sentCount++;
-    } catch (error) {
-      console.error(`Failed to send to ${recipient.email}:`, error);
-      failedCount++;
-
-      // Mark as failed but don't stop the campaign
-      await db
-        .update(campaignRecipients)
-        .set({ status: "bounced", bouncedAt: new Date(), bounceType: "soft" })
-        .where(eq(campaignRecipients.id, recipient.crId));
-    }
-  }
-
-  // Update campaign status
-  const finalStatus = failedCount === pendingRecipients.length ? "failed" : "sent";
-  await db
-    .update(campaigns)
-    .set({
-      status: finalStatus,
-      statsCache: {
-        sent: sentCount,
-        opened: 0,
-        clicked: 0,
-        bounced: failedCount,
-        unique_opens: 0,
-        unique_clicks: 0,
-        total: pendingRecipients.length,
-      },
-    })
-    .where(eq(campaigns.id, campaignId));
+  // Enqueue all jobs in batches of 50 — returns instantly
+  console.log(`[Send] Enqueueing ${jobs.length} jobs to Redis queue...`);
+  await enqueueEmailJobs(jobs);
+  console.log(`[Send] All ${jobs.length} jobs enqueued successfully`);
 
   await db.insert(auditLog).values({
     orgId: ctx.orgId,
@@ -305,10 +317,11 @@ export async function sendCampaign(campaignId: string) {
     action: "campaign.sent",
     entityType: "campaign",
     entityId: campaignId,
-    metadata: { sent: sentCount, failed: failedCount, total: pendingRecipients.length },
+    metadata: { enqueued: pendingRecipients.length },
   });
 
-  return { sent: sentCount, failed: failedCount };
+  console.log(`[Send] Campaign ${campaignId} send initiated — ${pendingRecipients.length} emails queued`);
+  return { enqueued: pendingRecipients.length };
 }
 
 export async function duplicateCampaign(campaignId: string) {
@@ -343,4 +356,134 @@ export async function deleteCampaign(campaignId: string) {
   await db
     .delete(campaigns)
     .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, ctx.orgId)));
+}
+
+export async function exportCampaignCSV(campaignId: string): Promise<string> {
+  const ctx = await requireSession();
+  const campaign = await getCampaign(campaignId);
+  if (!campaign) throw new Error("Campaign not found");
+
+  const rows = await db
+    .select({
+      email: recipients.email,
+      firstName: recipients.firstName,
+      lastName: recipients.lastName,
+      company: recipients.company,
+      status: campaignRecipients.status,
+      sentAt: campaignRecipients.sentAt,
+      deliveredAt: campaignRecipients.deliveredAt,
+      firstOpenedAt: campaignRecipients.firstOpenedAt,
+      openCount: campaignRecipients.openCount,
+      firstClickedAt: campaignRecipients.firstClickedAt,
+      clickCount: campaignRecipients.clickCount,
+      bouncedAt: campaignRecipients.bouncedAt,
+      bounceType: campaignRecipients.bounceType,
+    })
+    .from(campaignRecipients)
+    .innerJoin(recipients, eq(campaignRecipients.recipientId, recipients.id))
+    .where(eq(campaignRecipients.campaignId, campaignId))
+    .orderBy(desc(campaignRecipients.sentAt));
+
+  const header = "Email,First Name,Last Name,Company,Status,Sent At,Delivered At,First Opened At,Open Count,First Clicked At,Click Count,Bounced At,Bounce Type";
+  const csvRows = rows.map((r: typeof rows[number]) => {
+    const fields = [
+      r.email,
+      r.firstName || "",
+      r.lastName || "",
+      r.company || "",
+      r.status,
+      r.sentAt ? new Date(r.sentAt).toISOString() : "",
+      r.deliveredAt ? new Date(r.deliveredAt).toISOString() : "",
+      r.firstOpenedAt ? new Date(r.firstOpenedAt).toISOString() : "",
+      String(r.openCount),
+      r.firstClickedAt ? new Date(r.firstClickedAt).toISOString() : "",
+      String(r.clickCount),
+      r.bouncedAt ? new Date(r.bouncedAt).toISOString() : "",
+      r.bounceType || "",
+    ];
+    return fields.map((f) => `"${f.replace(/"/g, '""')}"`).join(",");
+  });
+
+  console.log(`[Campaign] Exported CSV for campaign ${campaignId}: ${rows.length} rows`);
+  return [header, ...csvRows].join("\n");
+}
+
+export async function resendToNonOpeners(campaignId: string) {
+  const ctx = await requireSession();
+  const original = await getCampaign(campaignId);
+  if (!original) throw new Error("Campaign not found");
+  if (original.status !== "sent") throw new Error("Campaign must be sent before resending to non-openers");
+
+  // Get recipients who haven't opened
+  const nonOpeners = await db
+    .select({ recipientId: campaignRecipients.recipientId })
+    .from(campaignRecipients)
+    .where(
+      and(
+        eq(campaignRecipients.campaignId, campaignId),
+        eq(campaignRecipients.openCount, 0),
+        sql`${campaignRecipients.status} != 'bounced'`
+      )
+    );
+
+  if (nonOpeners.length === 0) {
+    throw new Error("All recipients have already opened this campaign");
+  }
+
+  // Create a new campaign
+  const [newCampaign] = await db
+    .insert(campaigns)
+    .values({
+      orgId: ctx.orgId,
+      createdBy: ctx.userId,
+      name: `${original.name} (Resend to Non-Openers)`,
+      subject: original.subject,
+      previewText: original.previewText,
+      templateId: original.templateId,
+      contentHtml: original.contentHtml,
+      contentJson: original.contentJson,
+      fromName: original.fromName,
+      fromEmail: original.fromEmail,
+      replyTo: original.replyTo,
+      tags: original.tags,
+      status: "draft",
+    })
+    .returning();
+
+  // Add non-opener recipients to the new campaign
+  await db.insert(campaignRecipients).values(
+    nonOpeners.map((r: typeof nonOpeners[number]) => ({
+      campaignId: newCampaign.id,
+      recipientId: r.recipientId,
+      status: "pending" as const,
+    }))
+  );
+
+  // Update stats cache
+  await db
+    .update(campaigns)
+    .set({
+      statsCache: {
+        sent: 0,
+        opened: 0,
+        clicked: 0,
+        bounced: 0,
+        unique_opens: 0,
+        unique_clicks: 0,
+        total: nonOpeners.length,
+      },
+    })
+    .where(eq(campaigns.id, newCampaign.id));
+
+  await db.insert(auditLog).values({
+    orgId: ctx.orgId,
+    userId: ctx.userId,
+    action: "campaign.resend_non_openers",
+    entityType: "campaign",
+    entityId: newCampaign.id,
+    metadata: { originalCampaignId: campaignId, nonOpeners: nonOpeners.length },
+  });
+
+  console.log(`[Campaign] Resend to non-openers: created campaign ${newCampaign.id} with ${nonOpeners.length} recipients`);
+  return newCampaign;
 }

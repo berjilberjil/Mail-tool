@@ -30,6 +30,8 @@ import {
   getRecipientLists,
   getRecipientStats,
   createRecipientList,
+  updateRecipientList,
+  deleteRecipientList,
 } from "@/lib/actions/recipients";
 
 type RecipientList = {
@@ -60,6 +62,10 @@ export default function RecipientsPage() {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDescription, setNewDescription] = useState("");
+  const [editingList, setEditingList] = useState<RecipientList | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
 
   async function fetchData() {
     try {
@@ -102,6 +108,39 @@ export default function RecipientsPage() {
     } finally {
       setCreating(false);
     }
+  }
+
+  async function handleEdit() {
+    if (!editingList || !editName.trim()) return;
+    setEditSaving(true);
+    try {
+      await updateRecipientList(editingList.id, {
+        name: editName.trim(),
+        description: editDescription.trim() || undefined,
+      });
+      setEditingList(null);
+      await fetchData();
+    } catch (err) {
+      console.error("Failed to update list:", err);
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function handleDelete(listId: string) {
+    if (!confirm("Are you sure you want to delete this list? All recipients in this list will be removed.")) return;
+    try {
+      await deleteRecipientList(listId);
+      await fetchData();
+    } catch (err) {
+      console.error("Failed to delete list:", err);
+    }
+  }
+
+  function openEdit(list: RecipientList) {
+    setEditingList(list);
+    setEditName(list.name);
+    setEditDescription(list.description || "");
   }
 
   function formatDate(date: Date | null) {
@@ -160,9 +199,9 @@ export default function RecipientsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Recipients</h1>
+          <h1 className="text-xl sm:text-2xl font-bold">Recipients</h1>
           <p className="text-sm text-muted-foreground">
             Manage your recipient lists and contacts
           </p>
@@ -232,7 +271,7 @@ export default function RecipientsPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid gap-4 sm:grid-cols-4">
+      <div className="grid gap-4 grid-cols-2 sm:grid-cols-4">
         <Card>
           <CardContent className="p-4">
             <p className="text-sm text-muted-foreground">Total Contacts</p>
@@ -305,10 +344,13 @@ export default function RecipientsPage() {
                       <MoreHorizontal className="h-4 w-4" />
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => openEdit(list)}>
                         <Pencil className="mr-2 h-4 w-4" /> Edit
                       </DropdownMenuItem>
-                      <DropdownMenuItem className="text-destructive">
+                      <DropdownMenuItem
+                        className="text-destructive"
+                        onClick={() => handleDelete(list.id)}
+                      >
                         <Trash2 className="mr-2 h-4 w-4" /> Delete
                       </DropdownMenuItem>
                     </DropdownMenuContent>
@@ -343,6 +385,43 @@ export default function RecipientsPage() {
           ))}
         </div>
       )}
+
+      {/* Edit List Dialog */}
+      <Dialog open={!!editingList} onOpenChange={(open) => !open && setEditingList(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit List</DialogTitle>
+            <DialogDescription>Update the list name and description.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-name">Name</Label>
+              <Input
+                id="edit-name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-description">Description (optional)</Label>
+              <Textarea
+                id="edit-description"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingList(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleEdit} disabled={editSaving || !editName.trim()}>
+              {editSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

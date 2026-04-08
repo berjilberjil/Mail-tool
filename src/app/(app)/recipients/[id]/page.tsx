@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -106,13 +106,18 @@ export default function RecipientListDetailPage() {
   const [newFirstName, setNewFirstName] = useState("");
   const [newLastName, setNewLastName] = useState("");
   const [newCompany, setNewCompany] = useState("");
+  const [addError, setAddError] = useState("");
 
   // CSV import dialog
   const [csvOpen, setCsvOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [csvText, setCsvText] = useState("");
 
+  const fetchingRef = React.useRef(false);
+
   const fetchRecipients = useCallback(async (search?: string, status?: string) => {
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
     try {
       const filters: { status?: string; search?: string } = {};
       if (status) filters.status = status;
@@ -121,30 +126,41 @@ export default function RecipientListDetailPage() {
       setRecipients(data as Recipient[]);
     } catch (err) {
       console.error("Failed to load recipients:", err);
-    }
-  }, [listId]);
-
-  async function fetchData() {
-    try {
-      const [listData, recipientsData] = await Promise.all([
-        getRecipientList(listId),
-        getRecipients(listId),
-      ]);
-      setList(listData as RecipientList | null);
-      setRecipients(recipientsData as Recipient[]);
-    } catch (err) {
-      console.error("Failed to load list data:", err);
     } finally {
-      setLoading(false);
+      fetchingRef.current = false;
     }
-  }
-
-  useEffect(() => {
-    fetchData();
   }, [listId]);
 
-  // Debounced search and status filter
+  // Initial load: fetch list metadata + recipients once
   useEffect(() => {
+    let cancelled = false;
+    async function fetchData() {
+      try {
+        const [listData, recipientsData] = await Promise.all([
+          getRecipientList(listId),
+          getRecipients(listId),
+        ]);
+        if (!cancelled) {
+          setList(listData as RecipientList | null);
+          setRecipients(recipientsData as Recipient[]);
+        }
+      } catch (err) {
+        console.error("Failed to load list data:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    fetchData();
+    return () => { cancelled = true; };
+  }, [listId]);
+
+  // Debounced search and status filter (skip initial render)
+  const initialLoadDone = React.useRef(false);
+  useEffect(() => {
+    if (!initialLoadDone.current) {
+      initialLoadDone.current = true;
+      return;
+    }
     const timer = setTimeout(() => {
       fetchRecipients(searchQuery || undefined, statusFilter);
     }, 300);
@@ -154,22 +170,33 @@ export default function RecipientListDetailPage() {
   async function handleAddRecipient() {
     if (!newEmail.trim()) return;
     setAdding(true);
+    setAddError("");
     try {
-      await addRecipient({
+      const result = await addRecipient({
         listId,
         email: newEmail.trim(),
         firstName: newFirstName.trim() || undefined,
         lastName: newLastName.trim() || undefined,
         company: newCompany.trim() || undefined,
       });
+      if (!result.success) {
+        setAddError(result.error || "Failed to add recipient.");
+        setAdding(false);
+        return;
+      }
       setNewEmail("");
       setNewFirstName("");
       setNewLastName("");
       setNewCompany("");
+      setAddError("");
       setAddOpen(false);
-      await fetchRecipients(searchQuery || undefined, statusFilter);
+      // Clear search/filter so the new recipient is visible
+      setSearchQuery("");
+      setStatusFilter(undefined);
+      await fetchRecipients(undefined, undefined);
     } catch (err) {
       console.error("Failed to add recipient:", err);
+      setAddError("Something went wrong. Please try again.");
     } finally {
       setAdding(false);
     }
@@ -210,7 +237,9 @@ export default function RecipientListDetailPage() {
       await addRecipientsFromCSV(listId, rows);
       setCsvText("");
       setCsvOpen(false);
-      await fetchRecipients(searchQuery || undefined, statusFilter);
+      setSearchQuery("");
+      setStatusFilter(undefined);
+      await fetchRecipients(undefined, undefined);
     } catch (err) {
       console.error("Failed to import CSV:", err);
     } finally {
@@ -369,6 +398,11 @@ export default function RecipientListDetailPage() {
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
+                {addError && (
+                  <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                    {addError}
+                  </div>
+                )}
                 <div className="space-y-2">
                   <Label htmlFor="recipient-email">Email *</Label>
                   <Input
@@ -376,7 +410,7 @@ export default function RecipientListDetailPage() {
                     type="email"
                     placeholder="john@example.com"
                     value={newEmail}
-                    onChange={(e) => setNewEmail(e.target.value)}
+                    onChange={(e) => { setNewEmail(e.target.value); setAddError(""); }}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">

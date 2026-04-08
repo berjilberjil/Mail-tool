@@ -32,7 +32,14 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getTeamMembers, getPendingInvitations } from "@/lib/actions/team";
+import {
+  getTeamMembers,
+  getPendingInvitations,
+  inviteTeamMember,
+  changeTeamMemberRole,
+  removeTeamMember,
+  revokeInvitation,
+} from "@/lib/actions/team";
 import { format } from "date-fns";
 
 type TeamMember = {
@@ -78,6 +85,10 @@ export default function TeamSettingsPage() {
   const [pendingInvites, setPendingInvites] = useState<PendingInvitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("member");
+  const [inviting, setInviting] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   useEffect(() => {
     async function loadTeam() {
@@ -96,6 +107,74 @@ export default function TeamSettingsPage() {
     }
     loadTeam();
   }, []);
+
+  async function refreshData() {
+    const [membersData, invitesData] = await Promise.all([
+      getTeamMembers(),
+      getPendingInvitations(),
+    ]);
+    setMembers(membersData as TeamMember[]);
+    setPendingInvites(invitesData as PendingInvitation[]);
+  }
+
+  async function handleInvite() {
+    if (!inviteEmail.trim()) return;
+    setInviting(true);
+    try {
+      await inviteTeamMember(inviteEmail.trim(), inviteRole);
+      setInviteEmail("");
+      setInviteRole("member");
+      setInviteOpen(false);
+      await refreshData();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to invite";
+      alert(message);
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  async function handleChangeRole(memberId: string, currentRole: string) {
+    const newRole = currentRole === "admin" ? "member" : "admin";
+    try {
+      await changeTeamMemberRole(memberId, newRole);
+      await refreshData();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to change role";
+      alert(message);
+    }
+  }
+
+  async function handleRemove(memberId: string) {
+    if (!confirm("Are you sure you want to remove this member?")) return;
+    try {
+      await removeTeamMember(memberId);
+      await refreshData();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to remove member";
+      alert(message);
+    }
+  }
+
+  async function handleRevokeInvite(inviteId: string) {
+    try {
+      await revokeInvitation(inviteId);
+      await refreshData();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to revoke";
+      alert(message);
+    }
+  }
+
+  async function handleResendInvite(email: string, role: string) {
+    try {
+      await inviteTeamMember(email, role || "member");
+      await refreshData();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to resend";
+      alert(message);
+    }
+  }
 
   if (loading) {
     return (
@@ -147,7 +226,7 @@ export default function TeamSettingsPage() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Team Members</CardTitle>
-          <Dialog>
+          <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
             <DialogTrigger className="inline-flex h-9 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 cursor-pointer">
               <UserPlus className="mr-2 h-4 w-4" /> Invite Member
             </DialogTrigger>
@@ -165,6 +244,8 @@ export default function TeamSettingsPage() {
                     id="inviteEmail"
                     type="email"
                     placeholder="colleague@company.com"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
@@ -172,6 +253,8 @@ export default function TeamSettingsPage() {
                   <select
                     id="inviteRole"
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={inviteRole}
+                    onChange={(e) => setInviteRole(e.target.value)}
                   >
                     <option value="member">Member</option>
                     <option value="admin">Admin</option>
@@ -179,7 +262,10 @@ export default function TeamSettingsPage() {
                 </div>
               </div>
               <DialogFooter>
-                <Button>Send Invite</Button>
+                <Button onClick={handleInvite} disabled={inviting || !inviteEmail.trim()}>
+                  {inviting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Send Invite
+                </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -241,8 +327,13 @@ export default function TeamSettingsPage() {
                             <MoreHorizontal className="h-4 w-4" />
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem>Change Role</DropdownMenuItem>
-                            <DropdownMenuItem className="text-destructive">
+                            <DropdownMenuItem onClick={() => handleChangeRole(member.memberId, role)}>
+                              Switch to {role === "admin" ? "Member" : "Admin"}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="text-destructive"
+                              onClick={() => handleRemove(member.memberId)}
+                            >
                               <Trash2 className="mr-2 h-4 w-4" /> Remove
                             </DropdownMenuItem>
                           </DropdownMenuContent>
@@ -278,13 +369,18 @@ export default function TeamSettingsPage() {
                   </div>
                   <div className="flex gap-2">
                     <Badge variant="secondary">Pending</Badge>
-                    <Button variant="ghost" size="sm">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleResendInvite(invite.email, invite.role || "member")}
+                    >
                       Resend
                     </Button>
                     <Button
                       variant="ghost"
                       size="sm"
                       className="text-destructive"
+                      onClick={() => handleRevokeInvite(invite.id)}
                     >
                       Revoke
                     </Button>

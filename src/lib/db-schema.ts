@@ -114,8 +114,12 @@ export const organisations = pgTable("organisations", {
     .primaryKey()
     .references(() => organization.id, { onDelete: "cascade" }),
   plan: text("plan").notNull().default("free"), // free | pro | business
+  defaultFromEmail: text("default_from_email"),
+  defaultReplyTo: text("default_reply_to"),
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
+  razorpayCustomerId: text("razorpay_customer_id"),
+  razorpaySubscriptionId: text("razorpay_subscription_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

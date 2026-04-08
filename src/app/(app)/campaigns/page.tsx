@@ -14,7 +14,6 @@ import {
   Trash2,
   Send,
   Clock,
-  Tag,
   Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -39,6 +38,7 @@ import {
   getCampaigns,
   duplicateCampaign,
   deleteCampaign,
+  resendToNonOpeners,
 } from "@/lib/actions/campaigns";
 
 type Campaign = Awaited<ReturnType<typeof getCampaigns>>[number];
@@ -57,6 +57,7 @@ export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
 
   const fetchCampaigns = async () => {
     try {
@@ -91,9 +92,21 @@ export default function CampaignsPage() {
     }
   };
 
-  const filteredCampaigns = campaigns.filter((c) =>
-    c.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const handleResendNonOpeners = async (campaignId: string) => {
+    try {
+      const newCampaign = await resendToNonOpeners(campaignId);
+      router.push(`/campaigns/${newCampaign.id}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to resend";
+      alert(message);
+    }
+  };
+
+  const filteredCampaigns = campaigns.filter((c) => {
+    const matchesSearch = c.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesStatus = statusFilter === "all" || c.status === statusFilter;
+    return matchesSearch && matchesStatus;
+  });
 
   const getStats = (c: Campaign) => {
     const cache = c.statsCache as {
@@ -104,6 +117,7 @@ export default function CampaignsPage() {
       total?: number;
       unique_opens?: number;
       unique_clicks?: number;
+      errorMessage?: string;
     } | null;
     return {
       sent: cache?.sent ?? 0,
@@ -111,6 +125,7 @@ export default function CampaignsPage() {
       clicked: cache?.unique_clicks ?? cache?.clicked ?? 0,
       bounced: cache?.bounced ?? 0,
       total: cache?.total ?? 0,
+      errorMessage: cache?.errorMessage,
     };
   };
 
@@ -127,15 +142,15 @@ export default function CampaignsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Campaigns</h1>
+          <h1 className="text-xl sm:text-2xl font-bold">Campaigns</h1>
           <p className="text-sm text-muted-foreground">
             Create, manage, and track your email campaigns
           </p>
         </div>
         <Link href="/campaigns/new">
-          <Button>
+          <Button className="w-full sm:w-auto">
             <Plus className="mr-2 h-4 w-4" /> New Campaign
           </Button>
         </Link>
@@ -154,12 +169,19 @@ export default function CampaignsPage() {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
-            <Button variant="outline" size="sm">
-              <Filter className="mr-2 h-4 w-4" /> Filter
-            </Button>
-            <Button variant="outline" size="sm">
-              <Tag className="mr-2 h-4 w-4" /> Tags
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger className="inline-flex h-8 items-center justify-center rounded-md border border-input bg-background px-3 text-sm hover:bg-accent cursor-pointer">
+                <Filter className="mr-2 h-4 w-4" />
+                {statusFilter === "all" ? "Filter" : statusFilter}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                {["all", "draft", "scheduled", "sending", "sent", "failed"].map((s) => (
+                  <DropdownMenuItem key={s} onClick={() => setStatusFilter(s)}>
+                    {s === "all" ? "All statuses" : s.charAt(0).toUpperCase() + s.slice(1)}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </CardContent>
       </Card>
@@ -178,16 +200,17 @@ export default function CampaignsPage() {
               </p>
             </div>
           ) : (
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Campaign</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Sent</TableHead>
-                  <TableHead className="text-right">Opened</TableHead>
-                  <TableHead className="text-right">Clicked</TableHead>
-                  <TableHead className="text-right">Open Rate</TableHead>
-                  <TableHead>Date</TableHead>
+                  <TableHead className="hidden sm:table-cell text-right">Sent</TableHead>
+                  <TableHead className="hidden sm:table-cell text-right">Opened</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">Clicked</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">Open Rate</TableHead>
+                  <TableHead className="hidden lg:table-cell">Date</TableHead>
                   <TableHead className="w-10"></TableHead>
                 </TableRow>
               </TableHeader>
@@ -215,39 +238,46 @@ export default function CampaignsPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Badge
-                          variant={
-                            statusColor[c.status] as
-                              | "default"
-                              | "secondary"
-                              | "outline"
-                              | "destructive"
-                          }
-                        >
-                          {c.status === "scheduled" && (
-                            <Clock className="mr-1 h-3 w-3" />
+                        <div>
+                          <Badge
+                            variant={
+                              statusColor[c.status] as
+                                | "default"
+                                | "secondary"
+                                | "outline"
+                                | "destructive"
+                            }
+                          >
+                            {c.status === "scheduled" && (
+                              <Clock className="mr-1 h-3 w-3" />
+                            )}
+                            {c.status === "sent" && (
+                              <Send className="mr-1 h-3 w-3" />
+                            )}
+                            {c.status}
+                          </Badge>
+                          {c.status === "failed" && stats.errorMessage && (
+                            <p className="mt-1 max-w-[200px] truncate text-xs text-destructive" title={stats.errorMessage}>
+                              {stats.errorMessage}
+                            </p>
                           )}
-                          {c.status === "sent" && (
-                            <Send className="mr-1 h-3 w-3" />
-                          )}
-                          {c.status}
-                        </Badge>
+                        </div>
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="hidden sm:table-cell text-right">
                         {stats.sent > 0 ? stats.sent.toLocaleString() : "\u2014"}
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="hidden sm:table-cell text-right">
                         {stats.opened > 0 ? stats.opened.toLocaleString() : "\u2014"}
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="hidden md:table-cell text-right">
                         {stats.clicked > 0 ? stats.clicked.toLocaleString() : "\u2014"}
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="hidden md:table-cell text-right">
                         {stats.sent > 0
                           ? `${Math.round((stats.opened / stats.sent) * 100)}%`
                           : "\u2014"}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">
+                      <TableCell className="hidden lg:table-cell text-muted-foreground">
                         {c.sentAt
                           ? formatDate(c.sentAt)
                           : c.scheduledAt
@@ -270,10 +300,14 @@ export default function CampaignsPage() {
                             >
                               <Copy className="mr-2 h-4 w-4" /> Duplicate
                             </DropdownMenuItem>
-                            <DropdownMenuItem>
-                              <Send className="mr-2 h-4 w-4" /> Resend to
-                              Non-Openers
-                            </DropdownMenuItem>
+                            {c.status === "sent" && (
+                              <DropdownMenuItem
+                                onClick={() => handleResendNonOpeners(c.id)}
+                              >
+                                <Send className="mr-2 h-4 w-4" /> Resend to
+                                Non-Openers
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuItem
                               className="text-destructive"
                               onClick={() => handleDelete(c.id)}
@@ -288,6 +322,7 @@ export default function CampaignsPage() {
                 })}
               </TableBody>
             </Table>
+            </div>
           )}
         </CardContent>
       </Card>

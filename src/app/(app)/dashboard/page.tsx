@@ -257,15 +257,15 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <h1 className="text-xl sm:text-2xl font-bold">Dashboard</h1>
           <p className="text-sm text-muted-foreground">
             Overview of your email campaign performance
           </p>
         </div>
         <Link href="/campaigns/new">
-          <Button>
+          <Button className="w-full sm:w-auto">
             <Send className="mr-2 h-4 w-4" /> New Campaign
           </Button>
         </Link>
@@ -419,11 +419,11 @@ export default function DashboardPage() {
                 return (
                   <div
                     key={campaign.id}
-                    className="flex items-center justify-between rounded-lg border p-4"
+                    className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between rounded-lg border p-4"
                   >
-                    <div>
-                      <p className="font-medium">{campaign.name}</p>
-                      <p className="text-sm text-muted-foreground">
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{campaign.name}</p>
+                      <p className="text-sm text-muted-foreground truncate">
                         {campaign.status === "scheduled"
                           ? `Scheduled for ${campaign.scheduledAt ? format(new Date(campaign.scheduledAt), "MMM d, yyyy") : "TBD"}`
                           : campaign.status === "draft"

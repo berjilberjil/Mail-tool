@@ -1,14 +1,15 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { CreditCard, Check, ArrowRight } from "lucide-react";
+import { CreditCard, Check, ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getOrgPlan, getCampaignUsage, getTeamMembers } from "@/lib/actions/team";
+import { getOrgPlan, getCampaignUsage, getTeamMembers, ensureOrgRecord } from "@/lib/actions/team";
+import { useSession } from "@/lib/auth-client";
 
 const planLimits: Record<string, { campaigns: number; emails: number; members: number }> = {
   free: { campaigns: 3, emails: 500, members: 1 },
@@ -26,7 +27,7 @@ const plans = [
   {
     name: "Free",
     key: "free",
-    price: "$0",
+    price: "\u20B90",
     period: "",
     features: [
       "1 team member",
@@ -38,7 +39,7 @@ const plans = [
   {
     name: "Pro",
     key: "pro",
-    price: "$12",
+    price: "\u20B9999",
     period: "/mo",
     features: [
       "5 team members",
@@ -54,7 +55,7 @@ const plans = [
   {
     name: "Business",
     key: "business",
-    price: "$49",
+    price: "\u20B93,999",
     period: "/mo",
     features: [
       "Unlimited members",
@@ -67,15 +68,33 @@ const plans = [
   },
 ];
 
+function loadRazorpayScript(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (typeof window !== "undefined" && window.Razorpay) {
+      resolve(true);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
+
 export default function BillingSettingsPage() {
+  const { data: session } = useSession();
   const [currentPlan, setCurrentPlan] = useState("free");
   const [campaignsUsed, setCampaignsUsed] = useState(0);
   const [memberCount, setMemberCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [upgrading, setUpgrading] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadBillingData() {
       try {
+        // Ensure org row exists in organisations table before querying
+        await ensureOrgRecord();
         const [orgPlan, usage, members] = await Promise.all([
           getOrgPlan(),
           getCampaignUsage(),
@@ -92,6 +111,86 @@ export default function BillingSettingsPage() {
     }
     loadBillingData();
   }, []);
+
+  const handleUpgrade = async (planKey: string) => {
+    if (planKey === "free" || planKey === currentPlan) return;
+
+    setUpgrading(planKey);
+
+    try {
+      // Load Razorpay checkout script
+      const loaded = await loadRazorpayScript();
+      if (!loaded) {
+        alert("Failed to load payment gateway. Please try again.");
+        setUpgrading(null);
+        return;
+      }
+
+      // Create order on server
+      const res = await fetch("/api/razorpay/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: planKey }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.error || "Failed to create order");
+        setUpgrading(null);
+        return;
+      }
+
+      const { orderId, amount, currency } = await res.json();
+
+      // Open Razorpay checkout
+      const options: RazorpayOptions = {
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || "",
+        amount,
+        currency,
+        name: "Skcript Mail",
+        description: `${planKey.charAt(0).toUpperCase() + planKey.slice(1)} Plan - Monthly`,
+        order_id: orderId,
+        prefill: {
+          name: session?.user?.name || "",
+          email: session?.user?.email || "",
+        },
+        handler: async (response: RazorpayPaymentResponse) => {
+          // Verify payment on server
+          try {
+            const verifyRes = await fetch("/api/razorpay/verify-payment", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                plan: planKey,
+              }),
+            });
+
+            if (verifyRes.ok) {
+              setCurrentPlan(planKey);
+            } else {
+              alert("Payment verification failed. Please contact support.");
+            }
+          } catch {
+            alert("Payment verification failed. Please contact support.");
+          }
+          setUpgrading(null);
+        },
+        theme: { color: "#6366f1" },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.on("payment.failed", () => {
+        setUpgrading(null);
+      });
+      rzp.open();
+    } catch {
+      alert("Something went wrong. Please try again.");
+      setUpgrading(null);
+    }
+  };
 
   const limits = planLimits[currentPlan] || planLimits.free;
   const planLabel = currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1);
@@ -173,7 +272,7 @@ export default function BillingSettingsPage() {
               <p className="text-sm text-muted-foreground">{description}</p>
             </div>
             {currentPlan === "free" && (
-              <Button>
+              <Button onClick={() => handleUpgrade("pro")}>
                 Upgrade <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             )}
@@ -235,6 +334,7 @@ export default function BillingSettingsPage() {
         <div className="grid gap-6 sm:grid-cols-3">
           {plans.map((plan) => {
             const isCurrent = plan.key === currentPlan;
+            const isUpgrading = upgrading === plan.key;
             return (
               <Card
                 key={plan.name}
@@ -284,9 +384,19 @@ export default function BillingSettingsPage() {
                         ? "default"
                         : "outline"
                     }
-                    disabled={isCurrent}
+                    disabled={isCurrent || plan.key === "free" || isUpgrading}
+                    onClick={() => handleUpgrade(plan.key)}
                   >
-                    {isCurrent ? "Current Plan" : "Upgrade"}
+                    {isUpgrading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Processing...
+                      </>
+                    ) : isCurrent ? (
+                      "Current Plan"
+                    ) : (
+                      "Upgrade"
+                    )}
                   </Button>
                 </CardContent>
               </Card>

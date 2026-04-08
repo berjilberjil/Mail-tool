@@ -1,16 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHmac } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 import { db } from "@/lib/db";
 import { campaignEvents, campaignRecipients } from "@/lib/db-schema";
 import { sql } from "drizzle-orm";
 
 const HMAC_SECRET = process.env.BETTER_AUTH_SECRET || "default-secret";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function verifyHmac(url: string, signature: string): boolean {
   const expected = createHmac("sha256", HMAC_SECRET)
     .update(url)
     .digest("hex");
-  return expected === signature;
+  const expectedBuf = Buffer.from(expected);
+  const signatureBuf = Buffer.from(signature);
+  if (expectedBuf.length !== signatureBuf.length) return false;
+  return timingSafeEqual(expectedBuf, signatureBuf);
 }
 
 export async function GET(
@@ -18,14 +23,24 @@ export async function GET(
   { params }: { params: Promise<{ campaignId: string; recipientId: string }> }
 ) {
   const { campaignId, recipientId } = await params;
+
+  // Validate UUID format to prevent DB errors from malformed URLs
+  if (!UUID_RE.test(campaignId) || !UUID_RE.test(recipientId)) {
+    console.warn(`[Track:Click] Invalid UUID — campaign: ${campaignId}, recipient: ${recipientId}`);
+    return new NextResponse("Invalid tracking parameters", { status: 400 });
+  }
+
   const searchParams = request.nextUrl.searchParams;
   const url = searchParams.get("url");
   const sig = searchParams.get("sig");
 
   // Validate URL and HMAC signature
   if (!url || !sig || !verifyHmac(url, sig)) {
+    console.warn(`[Track:Click] Invalid HMAC — campaign: ${campaignId}, url: ${url}`);
     return new NextResponse("Invalid or tampered link", { status: 400 });
   }
+
+  console.log(`[Track:Click] Link clicked — campaign: ${campaignId}, recipient: ${recipientId}, url: ${url}`);
 
   // Log the click event asynchronously
   try {
@@ -49,7 +64,9 @@ export async function GET(
         );
     })();
 
-    logPromise.catch((err) => console.error("Click tracking error:", err));
+    logPromise
+      .then(() => console.log(`[Track:Click] Event logged for campaign: ${campaignId}, recipient: ${recipientId}`))
+      .catch((err) => console.error(`[Track:Click] DB error:`, err.message));
   } catch {
     // Silent — never break the redirect
   }

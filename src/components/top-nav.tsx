@@ -1,11 +1,11 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import {
   Moon,
   Sun,
-  Bell,
   Search,
   ChevronDown,
   LogOut,
@@ -28,11 +28,23 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useSession, signOut } from "@/lib/auth-client";
+import { NotificationsDropdown } from "@/components/notifications-dropdown";
+import { MobileSidebar } from "@/components/sidebar";
+import { getOrgPlan } from "@/lib/actions/team";
 
 export function TopNav() {
   const { theme, setTheme } = useTheme();
   const router = useRouter();
   const { data: session, isPending } = useSession();
+  const [plan, setPlan] = useState("free");
+
+  useEffect(() => {
+    if (session?.session?.activeOrganizationId) {
+      getOrgPlan()
+        .then((org) => setPlan(org?.plan || "free"))
+        .catch(() => {});
+    }
+  }, [session?.session?.activeOrganizationId]);
 
   const user = session?.user;
   const initials = user?.name
@@ -50,21 +62,26 @@ export function TopNav() {
   }
 
   return (
-    <header className="flex h-16 items-center justify-between border-b bg-background px-6">
-      {/* Search */}
-      <div className="relative w-full max-w-sm">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Search campaigns, templates..."
-          className="pl-9"
-        />
+    <header className="flex h-16 items-center justify-between border-b bg-background px-4 md:px-6">
+      <div className="flex items-center gap-2">
+        {/* Mobile hamburger */}
+        <MobileSidebar />
+
+        {/* Search - hidden on small mobile */}
+        <div className="relative hidden sm:block w-full max-w-sm">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search campaigns, templates..."
+            className="pl-9"
+          />
+        </div>
       </div>
 
       {/* Right side */}
-      <div className="flex items-center gap-3">
-        {/* Plan badge */}
-        <Badge variant="secondary" className="font-medium">
-          Free Plan
+      <div className="flex items-center gap-2 md:gap-3">
+        {/* Plan badge - hide on very small screens */}
+        <Badge variant="secondary" className="hidden sm:inline-flex font-medium">
+          {plan.charAt(0).toUpperCase() + plan.slice(1)} Plan
         </Badge>
 
         {/* Theme toggle */}
@@ -79,10 +96,7 @@ export function TopNav() {
         </Button>
 
         {/* Notifications */}
-        <Button variant="ghost" size="icon" className="relative">
-          <Bell className="h-4 w-4" />
-          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-destructive" />
-        </Button>
+        <NotificationsDropdown />
 
         {/* User menu */}
         {isPending ? (
@@ -103,14 +117,14 @@ export function TopNav() {
                   {user?.email || ""}
                 </p>
               </div>
-              <ChevronDown className="h-3 w-3 text-muted-foreground" />
+              <ChevronDown className="hidden md:block h-3 w-3 text-muted-foreground" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuGroup>
                 <DropdownMenuLabel>My Account</DropdownMenuLabel>
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
-              <DropdownMenuItem>
+              <DropdownMenuItem onClick={() => router.push("/profile")}>
                 <User className="mr-2 h-4 w-4" />
                 Profile
               </DropdownMenuItem>

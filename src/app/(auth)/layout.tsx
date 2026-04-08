@@ -30,7 +30,7 @@ export default function AuthLayout({
       </div>
 
       {/* Right - form */}
-      <div className="flex w-full items-center justify-center p-8 lg:w-1/2">
+      <div className="flex w-full items-center justify-center p-4 sm:p-8 lg:w-1/2">
         <div className="w-full max-w-sm">{children}</div>
       </div>
     </div>

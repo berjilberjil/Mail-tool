@@ -125,8 +125,26 @@ export async function addRecipient(data: {
   firstName?: string;
   lastName?: string;
   company?: string;
-}) {
+}): Promise<{ success: boolean; error?: string; recipient?: typeof recipients.$inferSelect }> {
   const ctx = await requireSession();
+
+  const normalizedEmail = data.email.toLowerCase().trim();
+
+  // Check if email already exists in this org
+  const existing = await db
+    .select({ id: recipients.id, listId: recipients.listId })
+    .from(recipients)
+    .where(and(eq(recipients.orgId, ctx.orgId), eq(recipients.email, normalizedEmail)))
+    .limit(1);
+
+  if (existing.length > 0) {
+    return {
+      success: false,
+      error: existing[0].listId === data.listId
+        ? `${normalizedEmail} is already in this list.`
+        : `${normalizedEmail} already exists in another list in your organization.`,
+    };
+  }
 
   // Auto-detect company from email domain if not provided
   const company = data.company || extractCompanyFromEmail(data.email);
@@ -136,15 +154,14 @@ export async function addRecipient(data: {
     .values({
       orgId: ctx.orgId,
       listId: data.listId,
-      email: data.email.toLowerCase().trim(),
+      email: normalizedEmail,
       firstName: data.firstName || null,
       lastName: data.lastName || null,
       company,
     })
-    .onConflictDoNothing()
     .returning();
 
-  return row;
+  return { success: true, recipient: row };
 }
 
 export async function addRecipientsFromCSV(

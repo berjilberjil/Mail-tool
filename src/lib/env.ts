@@ -35,4 +35,12 @@ export const env = {
 
   /** Resend API key — required for sending emails */
   RESEND_API_KEY: optional("RESEND_API_KEY"),
+
+  /** Redis URL for BullMQ job queue */
+  REDIS_URL: optional("REDIS_URL"),
+
+  /** Razorpay payment gateway credentials */
+  RAZORPAY_KEY_ID: optional("RAZORPAY_KEY_ID"),
+  RAZORPAY_KEY_SECRET: optional("RAZORPAY_KEY_SECRET"),
+  NEXT_PUBLIC_RAZORPAY_KEY_ID: optional("NEXT_PUBLIC_RAZORPAY_KEY_ID"),
 } as const;

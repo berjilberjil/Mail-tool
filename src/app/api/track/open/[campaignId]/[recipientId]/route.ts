@@ -9,11 +9,24 @@ const TRANSPARENT_GIF = Buffer.from(
   "base64"
 );
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ campaignId: string; recipientId: string }> }
 ) {
   const { campaignId, recipientId } = await params;
+
+  // Validate UUID format to prevent DB errors from malformed URLs
+  if (!UUID_RE.test(campaignId) || !UUID_RE.test(recipientId)) {
+    console.warn(`[Track:Open] Invalid UUID — campaign: ${campaignId}, recipient: ${recipientId}`);
+    return new Response(TRANSPARENT_GIF, {
+      status: 200,
+      headers: { "Content-Type": "image/gif" },
+    });
+  }
+
+  console.log(`[Track:Open] Email opened — campaign: ${campaignId}, recipient: ${recipientId}`);
 
   // Return the tracking pixel immediately
   const response = new Response(TRANSPARENT_GIF, {
@@ -57,7 +70,9 @@ export async function GET(
     })();
 
     // Fire and forget — don't block the response
-    logPromise.catch((err) => console.error("Open tracking error:", err));
+    logPromise
+      .then(() => console.log(`[Track:Open] Event logged for campaign: ${campaignId}, recipient: ${recipientId}`))
+      .catch((err) => console.error(`[Track:Open] DB error:`, err.message));
   } catch {
     // Silently ignore — tracking should never break the pixel response
   }

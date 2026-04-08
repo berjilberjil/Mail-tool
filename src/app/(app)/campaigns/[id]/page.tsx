@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { format } from "date-fns";
 import {
@@ -45,6 +45,8 @@ import {
   getCampaignOrgRollup,
   getCampaignTimeline,
   duplicateCampaign,
+  exportCampaignCSV,
+  resendToNonOpeners,
 } from "@/lib/actions/campaigns";
 
 type Campaign = NonNullable<Awaited<ReturnType<typeof getCampaign>>>;
@@ -77,6 +79,7 @@ const statusColor: Record<string, string> = {
 
 export default function CampaignDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const campaignId = params.id as string;
 
   const [campaign, setCampaign] = useState<Campaign | null>(null);
@@ -85,41 +88,91 @@ export default function CampaignDetailPage() {
   const [orgRollup, setOrgRollup] = useState<OrgRow[]>([]);
   const [timeline, setTimeline] = useState<TimelineRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchAll = useCallback(async () => {
+    try {
+      const [campaignData, statsData, recipientsData, orgData, timelineData] =
+        await Promise.all([
+          getCampaign(campaignId),
+          getCampaignStats(campaignId),
+          getCampaignRecipients(campaignId),
+          getCampaignOrgRollup(campaignId),
+          getCampaignTimeline(campaignId),
+        ]);
+
+      setCampaign(campaignData);
+      setStats(statsData);
+      setRecipients(recipientsData);
+      setOrgRollup(orgData);
+      setTimeline(timelineData);
+
+      return campaignData;
+    } catch (err) {
+      console.error("Failed to fetch campaign data:", err);
+      return null;
+    }
+  }, [campaignId]);
 
   useEffect(() => {
     if (!campaignId) return;
 
-    const fetchAll = async () => {
-      try {
-        const [campaignData, statsData, recipientsData, orgData, timelineData] =
-          await Promise.all([
-            getCampaign(campaignId),
-            getCampaignStats(campaignId),
-            getCampaignRecipients(campaignId),
-            getCampaignOrgRollup(campaignId),
-            getCampaignTimeline(campaignId),
-          ]);
+    const init = async () => {
+      const data = await fetchAll();
+      setLoading(false);
 
-        setCampaign(campaignData);
-        setStats(statsData);
-        setRecipients(recipientsData);
-        setOrgRollup(orgData);
-        setTimeline(timelineData);
-      } catch (err) {
-        console.error("Failed to fetch campaign data:", err);
-      } finally {
-        setLoading(false);
+      // Start polling if campaign is currently sending
+      if (data?.status === "sending") {
+        pollRef.current = setInterval(async () => {
+          const updated = await fetchAll();
+          if (updated && updated.status !== "sending") {
+            // Campaign finished — stop polling
+            if (pollRef.current) clearInterval(pollRef.current);
+            pollRef.current = null;
+          }
+        }, 3000);
       }
     };
 
-    fetchAll();
-  }, [campaignId]);
+    init();
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [campaignId, fetchAll]);
 
   const handleDuplicate = async () => {
     try {
       await duplicateCampaign(campaignId);
     } catch (err) {
       console.error("Failed to duplicate campaign:", err);
+    }
+  };
+
+  const handleExportCSV = async () => {
+    try {
+      const csv = await exportCampaignCSV(campaignId);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${campaign?.name || "campaign"}-recipients.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to export CSV:", err);
+    }
+  };
+
+  const handleResendNonOpeners = async () => {
+    try {
+      const newCampaign = await resendToNonOpeners(campaignId);
+      router.push(`/campaigns/${newCampaign.id}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to resend";
+      alert(message);
     }
   };
 
@@ -201,19 +254,49 @@ export default function CampaignDetailPage() {
     },
   ];
 
+  const errorMessage = (campaign.statsCache as { errorMessage?: string } | null)?.errorMessage;
+
   return (
     <div className="space-y-6">
+      {/* Failed campaign error banner */}
+      {campaign.status === "failed" && (
+        <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 text-destructive" />
+            <div>
+              <p className="font-medium text-destructive">Campaign failed to send</p>
+              {errorMessage ? (
+                <p className="mt-1 text-sm text-destructive/80">{errorMessage}</p>
+              ) : (
+                <p className="mt-1 text-sm text-destructive/80">
+                  All recipients failed. Check that your Resend sender domain is verified.
+                </p>
+              )}
+              {errorMessage?.includes("onboarding@resend.dev") || errorMessage?.includes("can only send") ? (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Tip: The Resend free tier can only send to the email address you signed up with.
+                  To send to other recipients, verify your own domain in the{" "}
+                  <a href="https://resend.com/domains" target="_blank" rel="noopener noreferrer" className="underline text-primary">
+                    Resend dashboard
+                  </a>.
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-4 min-w-0">
           <Link href="/campaigns">
-            <Button variant="ghost" size="icon">
+            <Button variant="ghost" size="icon" className="shrink-0">
               <ArrowLeft className="h-4 w-4" />
             </Button>
           </Link>
-          <div>
-            <h1 className="text-2xl font-bold">{campaign.name}</h1>
-            <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="min-w-0">
+            <h1 className="text-xl sm:text-2xl font-bold truncate">{campaign.name}</h1>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
               <Badge
                 variant={
                   statusColor[campaign.status] as
@@ -241,16 +324,18 @@ export default function CampaignDetailPage() {
             </div>
           </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm">
-            <Download className="mr-2 h-4 w-4" /> Export CSV
+        <div className="flex flex-wrap gap-2 sm:ml-auto">
+          <Button variant="outline" size="sm" onClick={handleExportCSV}>
+            <Download className="mr-2 h-4 w-4" /> Export
           </Button>
           <Button variant="outline" size="sm" onClick={handleDuplicate}>
             <Copy className="mr-2 h-4 w-4" /> Duplicate
           </Button>
-          <Button size="sm">
-            <Send className="mr-2 h-4 w-4" /> Resend to Non-Openers
-          </Button>
+          {campaign.status === "sent" && (
+            <Button size="sm" onClick={handleResendNonOpeners}>
+              <Send className="mr-2 h-4 w-4" /> <span className="hidden sm:inline">Resend to Non-Openers</span><span className="sm:hidden">Resend</span>
+            </Button>
+          )}
         </div>
       </div>
 

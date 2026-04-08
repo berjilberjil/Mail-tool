@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Building2, Save, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,8 +10,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSession, organization } from "@/lib/auth-client";
+import { deleteOrganisation, getOrgSettings, updateOrgSettings } from "@/lib/actions/team";
 
 export default function SettingsPage() {
+  const router = useRouter();
   const { data: session, isPending: sessionPending } = useSession();
 
   const [orgName, setOrgName] = useState("");
@@ -20,14 +23,22 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     async function loadOrg() {
       try {
-        const res = await organization.getFullOrganization();
+        const [res, settings] = await Promise.all([
+          organization.getFullOrganization(),
+          getOrgSettings(),
+        ]);
         if (res?.data) {
           setOrgName(res.data.name || "");
           setOrgSlug(res.data.slug || "");
+        }
+        if (settings) {
+          setFromEmail(settings.defaultFromEmail || "");
+          setReplyTo(settings.defaultReplyTo || "");
         }
       } catch {
         // Org may not be loaded yet
@@ -44,15 +55,38 @@ export default function SettingsPage() {
     setSaving(true);
     setSaved(false);
     try {
-      await organization.update({
-        data: { name: orgName },
-      });
+      await Promise.all([
+        organization.update({
+          data: { name: orgName },
+        }),
+        updateOrgSettings({
+          defaultFromEmail: fromEmail,
+          defaultReplyTo: replyTo,
+        }),
+      ]);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch {
       // Update may not be supported depending on permissions
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleDeleteOrg() {
+    const confirmed = prompt(
+      `Type "${orgName}" to confirm deletion. This action is irreversible.`
+    );
+    if (confirmed !== orgName) return;
+    setDeleting(true);
+    try {
+      await deleteOrganisation();
+      router.push("/");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to delete";
+      alert(message);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -164,7 +198,13 @@ export default function SettingsPage() {
                 Permanently delete this organisation and all its data.
               </p>
             </div>
-            <Button variant="destructive" size="sm">
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleDeleteOrg}
+              disabled={deleting}
+            >
+              {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Delete
             </Button>
           </div>

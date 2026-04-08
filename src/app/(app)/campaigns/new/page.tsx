@@ -199,12 +199,12 @@ export default function NewCampaignPage() {
       </div>
 
       {/* Stepper */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0">
         {steps.map((step, i) => (
-          <div key={step.id} className="flex items-center">
+          <div key={step.id} className="flex items-center shrink-0">
             <button
               onClick={() => setCurrentStep(step.id)}
-              className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+              className={`flex items-center gap-2 rounded-lg px-3 py-2 sm:px-4 text-sm font-medium transition-colors ${
                 currentStep === step.id
                   ? "bg-primary text-primary-foreground"
                   : currentStep > step.id
@@ -220,7 +220,7 @@ export default function NewCampaignPage() {
               <span className="hidden sm:inline">{step.label}</span>
             </button>
             {i < steps.length - 1 && (
-              <div className="mx-2 h-px w-8 bg-border sm:w-16" />
+              <div className="mx-1 h-px w-4 bg-border sm:mx-2 sm:w-16" />
             )}
           </div>
         ))}
