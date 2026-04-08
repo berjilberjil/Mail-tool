@@ -11,6 +11,7 @@ import {
 } from "../db-schema";
 import { eq, and, desc, sql, inArray } from "drizzle-orm";
 import { requireSession } from "./auth-helpers";
+import { sendCampaignEmail } from "../email";
 
 export async function getCampaigns() {
   const ctx = await requireSession();
@@ -202,49 +203,98 @@ export async function createCampaign(data: {
 export async function sendCampaign(campaignId: string) {
   const ctx = await requireSession();
 
+  // Get campaign details
+  const campaign = await getCampaign(campaignId);
+  if (!campaign) throw new Error("Campaign not found");
+
   // Mark campaign as sending
   await db
     .update(campaigns)
     .set({ status: "sending", sentAt: new Date() })
     .where(and(eq(campaigns.id, campaignId), eq(campaigns.orgId, ctx.orgId)));
 
-  // Mark all pending recipients as sent (in production, this would go through Bull queue + Resend)
-  const sentRecipients = await db
-    .update(campaignRecipients)
-    .set({ status: "sent", sentAt: new Date() })
+  // Get all pending campaign recipients with their email details
+  const pendingRecipients = await db
+    .select({
+      crId: campaignRecipients.id,
+      recipientId: campaignRecipients.recipientId,
+      email: recipients.email,
+      firstName: recipients.firstName,
+    })
+    .from(campaignRecipients)
+    .innerJoin(recipients, eq(campaignRecipients.recipientId, recipients.id))
     .where(
       and(
         eq(campaignRecipients.campaignId, campaignId),
         eq(campaignRecipients.status, "pending")
       )
-    )
-    .returning();
-
-  // Log sent events
-  if (sentRecipients.length > 0) {
-    await db.insert(campaignEvents).values(
-      sentRecipients.map((r) => ({
-        campaignId,
-        recipientId: r.recipientId,
-        eventType: "sent" as const,
-      }))
     );
+
+  let sentCount = 0;
+  let failedCount = 0;
+  const fromAddress = campaign.fromName
+    ? `${campaign.fromName} <${campaign.fromEmail}>`
+    : campaign.fromEmail;
+
+  // Send emails via Resend (sequentially to respect rate limits)
+  for (const recipient of pendingRecipients) {
+    try {
+      const resendEmailId = await sendCampaignEmail({
+        to: recipient.email,
+        from: fromAddress,
+        replyTo: campaign.replyTo || undefined,
+        subject: campaign.subject,
+        html: campaign.contentHtml || "<p>No content</p>",
+        campaignId,
+        recipientId: recipient.recipientId,
+        recipientEmail: recipient.email,
+        orgId: ctx.orgId,
+      });
+
+      // Mark as sent and store Resend email ID
+      await db
+        .update(campaignRecipients)
+        .set({
+          status: "sent",
+          sentAt: new Date(),
+          resendEmailId,
+        })
+        .where(eq(campaignRecipients.id, recipient.crId));
+
+      await db.insert(campaignEvents).values({
+        campaignId,
+        recipientId: recipient.recipientId,
+        eventType: "sent",
+        eventData: { resendEmailId },
+      });
+
+      sentCount++;
+    } catch (error) {
+      console.error(`Failed to send to ${recipient.email}:`, error);
+      failedCount++;
+
+      // Mark as failed but don't stop the campaign
+      await db
+        .update(campaignRecipients)
+        .set({ status: "bounced", bouncedAt: new Date(), bounceType: "soft" })
+        .where(eq(campaignRecipients.id, recipient.crId));
+    }
   }
 
-  // Update campaign status to sent
-  const totalCount = sentRecipients.length;
+  // Update campaign status
+  const finalStatus = failedCount === pendingRecipients.length ? "failed" : "sent";
   await db
     .update(campaigns)
     .set({
-      status: "sent",
+      status: finalStatus,
       statsCache: {
-        sent: totalCount,
+        sent: sentCount,
         opened: 0,
         clicked: 0,
-        bounced: 0,
+        bounced: failedCount,
         unique_opens: 0,
         unique_clicks: 0,
-        total: totalCount,
+        total: pendingRecipients.length,
       },
     })
     .where(eq(campaigns.id, campaignId));
@@ -255,10 +305,10 @@ export async function sendCampaign(campaignId: string) {
     action: "campaign.sent",
     entityType: "campaign",
     entityId: campaignId,
-    metadata: { recipients: totalCount },
+    metadata: { sent: sentCount, failed: failedCount, total: pendingRecipients.length },
   });
 
-  return { sent: totalCount };
+  return { sent: sentCount, failed: failedCount };
 }
 
 export async function duplicateCampaign(campaignId: string) {

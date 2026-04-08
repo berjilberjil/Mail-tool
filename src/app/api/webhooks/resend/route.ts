@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Webhook } from "svix";
 import { db } from "@/lib/db";
 import { campaignEvents, campaignRecipients, recipients } from "@/lib/db-schema";
 import { eq, sql } from "drizzle-orm";
@@ -35,12 +36,47 @@ interface ResendWebhookPayload {
 }
 
 export async function POST(request: NextRequest) {
-  // TODO: Verify Resend webhook signature in production
-  // const signature = request.headers.get("resend-signature");
+  const body = await request.text();
+
+  // --- Webhook signature verification ---
+  const webhookSecret = process.env.RESEND_WEBHOOK_SECRET;
+
+  if (webhookSecret) {
+    const svixId = request.headers.get("webhook-id");
+    const svixTimestamp = request.headers.get("webhook-timestamp");
+    const svixSignature = request.headers.get("webhook-signature");
+
+    if (!svixId || !svixTimestamp || !svixSignature) {
+      return NextResponse.json(
+        { error: "Missing webhook verification headers" },
+        { status: 400 }
+      );
+    }
+
+    const wh = new Webhook(webhookSecret);
+    try {
+      wh.verify(body, {
+        "webhook-id": svixId,
+        "webhook-timestamp": svixTimestamp,
+        "webhook-signature": svixSignature,
+      });
+    } catch (err) {
+      console.error("Resend webhook signature verification failed:", err);
+      return NextResponse.json(
+        { error: "Invalid webhook signature" },
+        { status: 401 }
+      );
+    }
+  } else {
+    console.warn(
+      "[webhooks/resend] RESEND_WEBHOOK_SECRET is not set — skipping signature verification. " +
+        "Set it in production to secure this endpoint."
+    );
+  }
 
   let payload: ResendWebhookPayload;
   try {
-    payload = await request.json();
+    payload = JSON.parse(body);
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }

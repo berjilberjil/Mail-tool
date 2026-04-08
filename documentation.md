@@ -1,7 +1,7 @@
 # Skcript Mail — Documentation
 
 **Last updated:** April 8, 2026
-**Status:** MVP functional — ready for demo/staging
+**Status:** Production-ready — email sending via Resend integrated
 
 ---
 
@@ -72,6 +72,43 @@ On send:
 
 - Added `ensureOrgRecord()` call during org creation to create the extended `organisations` table entry with billing fields
 
+### 6. Resend Email Integration (NEW)
+
+- Installed `resend` SDK and configured `RESEND_API_KEY` in `.env.local`
+- Created `/src/lib/email.ts` — email sending service with:
+  - `sendCampaignEmail()` — sends campaign emails with tracking pixel injection, click-tracking link rewriting, unsubscribe footer, and `List-Unsubscribe` headers
+  - `sendTransactionalEmail()` — sends system emails (password reset, email verification) without tracking
+- Updated `sendCampaign()` in `/src/lib/actions/campaigns.ts` to actually send emails via Resend:
+  - Sends sequentially to respect rate limits
+  - Stores `resendEmailId` on each campaign_recipient for webhook correlation
+  - Handles per-recipient failures gracefully (marks as soft bounce, continues sending)
+  - Campaign marked "failed" only if ALL recipients fail, "sent" otherwise
+
+### 7. Password Reset Flow (NEW)
+
+- Updated `/src/lib/auth.ts` with `sendResetPassword` callback that sends reset emails via Resend
+- Created `/src/app/(auth)/forgot-password/page.tsx` — enter email, receive reset link
+- Created `/src/app/(auth)/reset-password/page.tsx` — set new password with token from URL
+- Login page already had "Forgot password?" link wired to `/forgot-password`
+
+### 8. Email Verification (NEW)
+
+- Added `sendVerificationEmail` callback in Better Auth config
+- Sends verification emails via Resend when users sign up
+
+### 9. Login Fix — Active Organization (NEW)
+
+- Fixed bug where login created a new session without `activeOrganizationId`
+- Updated login page to auto-set active organization after sign-in via `organization.setActive()`
+
+### 10. Production Hardening (NEW)
+
+- Created `/src/lib/env.ts` — environment variable validation (fails fast on missing required vars)
+- Updated Resend webhook handler with Svix signature verification (when `RESEND_WEBHOOK_SECRET` is set)
+- Created `/src/app/(app)/error.tsx` — global error boundary with retry
+- Created `/src/app/not-found.tsx` — custom 404 page
+- Fixed TopNav dropdown menu error (`MenuGroupRootContext` missing)
+
 ---
 
 ## Tech Stack (as configured)
@@ -86,6 +123,8 @@ On send:
 | UI | React 19.2.4 + shadcn/ui + Tailwind CSS 4 |
 | Charts | Recharts 3.8.0 |
 | Forms | React Hook Form + Zod |
+| Email | Resend SDK |
+| Webhooks | Svix (Resend webhook verification) |
 | State | Zustand (available, not yet used) |
 | Data Fetching | TanStack Query (available, not yet used) |
 
@@ -150,7 +189,7 @@ npm run dev
 - [x] Recipient list management + CSV import
 - [x] Company auto-detection from email domain
 - [x] Campaign creation wizard (4 steps)
-- [x] Campaign sending (DB-level — marks as sent, creates events)
+- [x] Campaign sending via Resend (real emails with tracking)
 - [x] Campaign analytics (stats, timeline, individual opens, org rollup, bounces)
 - [x] Dashboard with real stats and live activity feed
 - [x] Team management (view members, roles)
@@ -162,28 +201,34 @@ npm run dev
 - [x] Resend webhook handler (delivery, bounce, open, click events)
 - [x] Campaign duplicate
 - [x] Billing page with real plan and usage data
+- [x] Password reset flow (forgot password → email → reset)
+- [x] Email verification on signup
+- [x] Auto-set active organization on login
+- [x] Global error boundary with retry
+- [x] Custom 404 page
+- [x] Environment variable validation
+- [x] Resend webhook signature verification (Svix)
 
 ## What Needs External API Keys
 
 | Feature | Service | Env Variable |
 |---------|---------|-------------|
-| Email sending | Resend | `RESEND_API_KEY` |
+| Email sending | Resend | `RESEND_API_KEY` (configured) |
 | Payment processing | Stripe | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` |
 
-Without these keys, the app is fully functional for demo purposes — campaigns are recorded as sent in the database, and analytics work when tracking pixel/click events are triggered.
+**Resend API key is configured.** To send to real recipients, verify your domain in Resend dashboard (DNS records). Free tier only allows sending to the account owner's email via `onboarding@resend.dev`.
 
 ## What's Remaining (Post-MVP)
 
 - [ ] Stripe Checkout integration (webhook handler exists but needs Stripe SDK)
 - [ ] Bull + Redis queue for background email sending (currently sends synchronously)
 - [ ] TipTap rich text editor for template editing
-- [ ] Email verification flow
-- [ ] Password reset
 - [ ] Google OAuth
 - [ ] Team member invitation emails (UI exists, needs Resend integration)
 - [ ] CSV export for opens/clicks
 - [ ] Schedule send (DB field exists, needs cron/scheduler)
 - [ ] Real-time updates via SSE or TanStack Query polling
+- [ ] Domain verification in Resend for production email sending
 
 ---
 
@@ -198,9 +243,16 @@ src/
 │   │   ├── templates/      # Template gallery + custom
 │   │   ├── recipients/     # Recipient lists + detail
 │   │   ├── settings/       # General, Team, Billing, Activity
+│   │   ├── error.tsx       # Global error boundary (NEW)
 │   │   └── layout.tsx      # Sidebar + TopNav layout
-│   ├── (auth)/             # Auth routes (login, signup, onboarding)
+│   ├── (auth)/             # Auth routes
+│   │   ├── login/          # Sign in
+│   │   ├── signup/         # Sign up
+│   │   ├── forgot-password/ # Request password reset (NEW)
+│   │   ├── reset-password/  # Set new password (NEW)
+│   │   └── onboarding/     # Org setup
 │   ├── api/                # API routes (auth, tracking, webhooks)
+│   ├── not-found.tsx       # Custom 404 page (NEW)
 │   └── page.tsx            # Landing page
 ├── components/
 │   ├── ui/                 # shadcn/ui components (25+)
@@ -208,10 +260,12 @@ src/
 │   └── top-nav.tsx         # Top bar with user menu
 └── lib/
     ├── actions/            # Server actions (all business logic)
-    ├── auth.ts             # Better Auth server config
+    ├── auth.ts             # Better Auth config (with Resend callbacks)
     ├── auth-client.ts      # Better Auth client hooks
     ├── db.ts               # Drizzle + postgres.js connection
     ├── db-schema.ts        # Complete database schema
+    ├── email.ts            # Resend email service (NEW)
+    ├── env.ts              # Environment validation (NEW)
     ├── tracking.ts         # Tracking URL utilities
     └── utils.ts            # Utility functions
 ```

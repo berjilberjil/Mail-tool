@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { signIn } from "@/lib/auth-client";
+import { signIn, organization } from "@/lib/auth-client";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -33,6 +33,16 @@ export default function LoginPage() {
       setError(signInError.message || "Invalid email or password.");
       setLoading(false);
       return;
+    }
+
+    // Auto-set the active organization (pick the first one the user belongs to)
+    try {
+      const { data: orgs } = await organization.list();
+      if (orgs && orgs.length > 0) {
+        await organization.setActive({ organizationId: orgs[0].id });
+      }
+    } catch {
+      // Non-critical — org will be set on first dashboard load
     }
 
     router.push("/dashboard");
