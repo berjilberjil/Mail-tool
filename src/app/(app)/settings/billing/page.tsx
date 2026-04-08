@@ -1,15 +1,31 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { CreditCard, Check, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { getOrgPlan, getCampaignUsage, getTeamMembers } from "@/lib/actions/team";
+
+const planLimits: Record<string, { campaigns: number; emails: number; members: number }> = {
+  free: { campaigns: 3, emails: 500, members: 1 },
+  pro: { campaigns: Infinity, emails: 10000, members: 5 },
+  business: { campaigns: Infinity, emails: 100000, members: Infinity },
+};
+
+const planDescriptions: Record<string, string> = {
+  free: "Basic email campaigns with aggregate tracking",
+  pro: "Advanced campaigns with individual tracking and analytics",
+  business: "Enterprise-grade campaigns with unlimited access",
+};
 
 const plans = [
   {
     name: "Free",
+    key: "free",
     price: "$0",
     period: "",
     features: [
@@ -18,10 +34,10 @@ const plans = [
       "500 emails/month",
       "Aggregate open count only",
     ],
-    current: true,
   },
   {
     name: "Pro",
+    key: "pro",
     price: "$12",
     period: "/mo",
     features: [
@@ -37,6 +53,7 @@ const plans = [
   },
   {
     name: "Business",
+    key: "business",
     price: "$49",
     period: "/mo",
     features: [
@@ -51,6 +68,92 @@ const plans = [
 ];
 
 export default function BillingSettingsPage() {
+  const [currentPlan, setCurrentPlan] = useState("free");
+  const [campaignsUsed, setCampaignsUsed] = useState(0);
+  const [memberCount, setMemberCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadBillingData() {
+      try {
+        const [orgPlan, usage, members] = await Promise.all([
+          getOrgPlan(),
+          getCampaignUsage(),
+          getTeamMembers(),
+        ]);
+        setCurrentPlan(orgPlan?.plan || "free");
+        setCampaignsUsed(usage?.campaignsThisMonth || 0);
+        setMemberCount(members?.length || 0);
+      } catch {
+        // Fallback to defaults
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadBillingData();
+  }, []);
+
+  const limits = planLimits[currentPlan] || planLimits.free;
+  const planLabel = currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1);
+  const description = planDescriptions[currentPlan] || planDescriptions.free;
+
+  const campaignPercent =
+    limits.campaigns === Infinity
+      ? 0
+      : Math.min(100, Math.round((campaignsUsed / limits.campaigns) * 100));
+
+  const memberPercent =
+    limits.members === Infinity
+      ? 0
+      : Math.min(100, Math.round((memberCount / limits.members) * 100));
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-6 w-40" />
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="space-y-2">
+                <Skeleton className="h-7 w-32" />
+                <Skeleton className="h-4 w-64" />
+              </div>
+              <Skeleton className="h-10 w-28" />
+            </div>
+            <Separator />
+            <div className="space-y-4">
+              <Skeleton className="h-5 w-36" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-full" />
+            </div>
+          </CardContent>
+        </Card>
+        <div>
+          <Skeleton className="mb-4 h-6 w-36" />
+          <div className="grid gap-6 sm:grid-cols-3">
+            {[1, 2, 3].map((i) => (
+              <Card key={i}>
+                <CardContent className="p-6">
+                  <Skeleton className="h-6 w-20" />
+                  <Skeleton className="mt-2 h-10 w-24" />
+                  <div className="mt-6 space-y-2">
+                    {[1, 2, 3, 4].map((j) => (
+                      <Skeleton key={j} className="h-4 w-full" />
+                    ))}
+                  </div>
+                  <Skeleton className="mt-6 h-10 w-full" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Current Plan */}
@@ -64,16 +167,16 @@ export default function BillingSettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-xl font-bold">Free Plan</h3>
+                <h3 className="text-xl font-bold">{planLabel} Plan</h3>
                 <Badge variant="secondary">Current</Badge>
               </div>
-              <p className="text-sm text-muted-foreground">
-                Basic email campaigns with aggregate tracking
-              </p>
+              <p className="text-sm text-muted-foreground">{description}</p>
             </div>
-            <Button>
-              Upgrade <ArrowRight className="ml-2 h-4 w-4" />
-            </Button>
+            {currentPlan === "free" && (
+              <Button>
+                Upgrade <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            )}
           </div>
 
           <Separator />
@@ -85,23 +188,41 @@ export default function BillingSettingsPage() {
               <div>
                 <div className="flex justify-between text-sm">
                   <span>Campaigns</span>
-                  <span className="font-medium">2 / 3</span>
+                  <span className="font-medium">
+                    {campaignsUsed} /{" "}
+                    {limits.campaigns === Infinity
+                      ? "Unlimited"
+                      : limits.campaigns}
+                  </span>
                 </div>
-                <Progress value={67} className="mt-1" />
+                {limits.campaigns !== Infinity && (
+                  <Progress value={campaignPercent} className="mt-1" />
+                )}
               </div>
               <div>
                 <div className="flex justify-between text-sm">
                   <span>Emails Sent</span>
-                  <span className="font-medium">340 / 500</span>
+                  <span className="font-medium">
+                    {limits.emails === Infinity
+                      ? "Unlimited"
+                      : `0 / ${limits.emails.toLocaleString()}`}
+                  </span>
                 </div>
-                <Progress value={68} className="mt-1" />
+                <Progress value={0} className="mt-1" />
               </div>
               <div>
                 <div className="flex justify-between text-sm">
                   <span>Team Members</span>
-                  <span className="font-medium">1 / 1</span>
+                  <span className="font-medium">
+                    {memberCount} /{" "}
+                    {limits.members === Infinity
+                      ? "Unlimited"
+                      : limits.members}
+                  </span>
                 </div>
-                <Progress value={100} className="mt-1" />
+                {limits.members !== Infinity && (
+                  <Progress value={memberPercent} className="mt-1" />
+                )}
               </div>
             </div>
           </div>
@@ -112,51 +233,65 @@ export default function BillingSettingsPage() {
       <div>
         <h2 className="mb-4 text-lg font-semibold">Available Plans</h2>
         <div className="grid gap-6 sm:grid-cols-3">
-          {plans.map((plan) => (
-            <Card
-              key={plan.name}
-              className={
-                plan.popular
-                  ? "border-primary ring-1 ring-primary"
-                  : plan.current
-                  ? "border-primary/50"
-                  : ""
-              }
-            >
-              <CardContent className="p-6">
-                {plan.popular && (
-                  <Badge className="mb-3">Most Popular</Badge>
-                )}
-                {plan.current && (
-                  <Badge variant="outline" className="mb-3">
-                    Current Plan
-                  </Badge>
-                )}
-                <h3 className="text-xl font-bold">{plan.name}</h3>
-                <div className="mt-2">
-                  <span className="text-3xl font-bold">{plan.price}</span>
-                  {plan.period && (
-                    <span className="text-muted-foreground">{plan.period}</span>
+          {plans.map((plan) => {
+            const isCurrent = plan.key === currentPlan;
+            return (
+              <Card
+                key={plan.name}
+                className={
+                  plan.popular
+                    ? "border-primary ring-1 ring-primary"
+                    : isCurrent
+                    ? "border-primary/50"
+                    : ""
+                }
+              >
+                <CardContent className="p-6">
+                  {plan.popular && (
+                    <Badge className="mb-3">Most Popular</Badge>
                   )}
-                </div>
-                <ul className="mt-6 space-y-2">
-                  {plan.features.map((f) => (
-                    <li key={f} className="flex items-center gap-2 text-sm">
-                      <Check className="h-4 w-4 text-primary" />
-                      {f}
-                    </li>
-                  ))}
-                </ul>
-                <Button
-                  className="mt-6 w-full"
-                  variant={plan.current ? "outline" : plan.popular ? "default" : "outline"}
-                  disabled={plan.current}
-                >
-                  {plan.current ? "Current Plan" : "Upgrade"}
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
+                  {isCurrent && (
+                    <Badge variant="outline" className="mb-3">
+                      Current Plan
+                    </Badge>
+                  )}
+                  <h3 className="text-xl font-bold">{plan.name}</h3>
+                  <div className="mt-2">
+                    <span className="text-3xl font-bold">{plan.price}</span>
+                    {plan.period && (
+                      <span className="text-muted-foreground">
+                        {plan.period}
+                      </span>
+                    )}
+                  </div>
+                  <ul className="mt-6 space-y-2">
+                    {plan.features.map((f) => (
+                      <li
+                        key={f}
+                        className="flex items-center gap-2 text-sm"
+                      >
+                        <Check className="h-4 w-4 text-primary" />
+                        {f}
+                      </li>
+                    ))}
+                  </ul>
+                  <Button
+                    className="mt-6 w-full"
+                    variant={
+                      isCurrent
+                        ? "outline"
+                        : plan.popular
+                        ? "default"
+                        : "outline"
+                    }
+                    disabled={isCurrent}
+                  >
+                    {isCurrent ? "Current Plan" : "Upgrade"}
+                  </Button>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       </div>
     </div>

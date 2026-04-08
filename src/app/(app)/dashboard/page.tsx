@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import {
   Send,
   Eye,
@@ -13,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
 import Link from "next/link";
 import {
   LineChart,
@@ -23,113 +25,235 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { format, formatDistanceToNow } from "date-fns";
+import {
+  getDashboardStats,
+  getRecentCampaigns,
+  getRecentActivity,
+  getOpensOverTime,
+} from "@/lib/actions/dashboard";
 
-const stats = [
-  {
-    label: "Total Sent",
-    value: "12,458",
-    change: "+2,340 this month",
-    icon: Send,
-    color: "text-blue-500",
-  },
-  {
-    label: "Total Opens",
-    value: "8,721",
-    change: "70% open rate",
-    icon: Eye,
-    color: "text-green-500",
-  },
-  {
-    label: "Total Clicks",
-    value: "3,210",
-    change: "26% click rate",
-    icon: MousePointerClick,
-    color: "text-purple-500",
-  },
-  {
-    label: "Bounce Rate",
-    value: "1.2%",
-    change: "Healthy",
-    icon: AlertTriangle,
-    color: "text-yellow-500",
-  },
-];
+type DashboardStats = {
+  totalCampaigns: number;
+  totalEmailsSent: number;
+  openRate: number;
+  clickRate: number;
+  bounceRate: number;
+  activeRecipients: number;
+};
 
-const openTrend = [
-  { date: "Mar 1", opens: 120 },
-  { date: "Mar 5", opens: 340 },
-  { date: "Mar 10", opens: 280 },
-  { date: "Mar 15", opens: 520 },
-  { date: "Mar 20", opens: 410 },
-  { date: "Mar 25", opens: 680 },
-  { date: "Mar 30", opens: 590 },
-  { date: "Apr 1", opens: 720 },
-  { date: "Apr 5", opens: 850 },
-];
+type Campaign = {
+  id: string;
+  name: string;
+  status: string;
+  sentAt: Date | null;
+  scheduledAt?: Date | null;
+  createdAt: Date;
+  statsCache: {
+    sent?: number;
+    opened?: number;
+    clicked?: number;
+    bounced?: number;
+    total?: number;
+  } | null;
+};
 
-const recentCampaigns = [
-  {
-    name: "Q2 Product Launch",
-    sent: 2400,
-    opened: 1680,
-    status: "sent",
-    date: "Apr 5",
-  },
-  {
-    name: "April Newsletter",
-    sent: 1800,
-    opened: 1200,
-    status: "sent",
-    date: "Apr 3",
-  },
-  {
-    name: "Feature Announcement",
-    sent: 3200,
-    opened: 2100,
-    status: "sent",
-    date: "Apr 1",
-  },
-  {
-    name: "Webinar Invite",
-    sent: 0,
-    opened: 0,
-    status: "scheduled",
-    date: "Apr 10",
-  },
-];
+type ActivityItem = {
+  id: string;
+  action: string;
+  entityType: string;
+  metadata: Record<string, unknown> | null;
+  createdAt: Date;
+  userName: string | null;
+};
 
-const activityFeed = [
-  {
-    text: "Priya from Infosys opened Q2 Product Launch",
-    time: "2 mins ago",
-  },
-  {
-    text: "Rahul from Tata clicked pricing link in April Newsletter",
-    time: "5 mins ago",
-  },
-  {
-    text: "3 people from Wipro opened Feature Announcement",
-    time: "12 mins ago",
-  },
-  {
-    text: "Ananya from Zoho unsubscribed from Q2 Product Launch",
-    time: "18 mins ago",
-  },
-  {
-    text: "Karthik from Freshworks opened April Newsletter",
-    time: "25 mins ago",
-  },
-  {
-    text: "Deepa from HCL clicked demo link in Feature Announcement",
-    time: "32 mins ago",
-  },
-  {
-    text: "5 new opens on Q2 Product Launch",
-    time: "40 mins ago",
-  },
-];
+type OpensTrendItem = {
+  date: string;
+  opens: number;
+  clicks: number;
+};
+
+function getHealthIndicator(rate: number, type: "bounce" | "open" | "complaint") {
+  if (type === "bounce") {
+    if (rate < 3) return { color: "bg-green-500", label: "Healthy" };
+    if (rate < 5) return { color: "bg-yellow-500", label: "Warning" };
+    return { color: "bg-red-500", label: "Critical" };
+  }
+  if (type === "open") {
+    if (rate >= 40) return { color: "bg-green-500", label: "Excellent" };
+    if (rate >= 20) return { color: "bg-yellow-500", label: "Average" };
+    return { color: "bg-red-500", label: "Low" };
+  }
+  // complaint
+  if (rate < 0.1) return { color: "bg-green-500", label: "Healthy" };
+  if (rate < 0.3) return { color: "bg-yellow-500", label: "Warning" };
+  return { color: "bg-red-500", label: "Critical" };
+}
+
+function formatActivityText(item: ActivityItem): string {
+  const user = item.userName || "Someone";
+  const meta = item.metadata as Record<string, string> | null;
+  const entityName = meta?.name || meta?.campaignName || item.entityType;
+
+  switch (item.action) {
+    case "campaign.created":
+      return `${user} created campaign "${entityName}"`;
+    case "campaign.sent":
+      return `${user} sent campaign "${entityName}"`;
+    case "campaign.scheduled":
+      return `${user} scheduled campaign "${entityName}"`;
+    case "campaign.updated":
+      return `${user} updated campaign "${entityName}"`;
+    case "campaign.deleted":
+      return `${user} deleted campaign "${entityName}"`;
+    case "recipient.imported":
+      return `${user} imported ${meta?.count || ""} recipients`;
+    case "recipient.created":
+      return `${user} added a new recipient`;
+    case "template.created":
+      return `${user} created template "${entityName}"`;
+    case "template.updated":
+      return `${user} updated template "${entityName}"`;
+    default:
+      return `${user} performed ${item.action.replace(/\./g, " ")} on ${item.entityType}`;
+  }
+}
+
+function StatCardSkeleton() {
+  return (
+    <Card>
+      <CardContent className="p-6">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-4 w-4 rounded" />
+        </div>
+        <Skeleton className="mt-2 h-8 w-20" />
+        <Skeleton className="mt-1 h-3 w-32" />
+      </CardContent>
+    </Card>
+  );
+}
+
+function ChartSkeleton() {
+  return (
+    <div className="h-[300px] flex items-center justify-center">
+      <div className="space-y-3 w-full px-4">
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-[90%]" />
+        <Skeleton className="h-4 w-[80%]" />
+        <Skeleton className="h-4 w-[95%]" />
+        <Skeleton className="h-4 w-[70%]" />
+        <Skeleton className="h-4 w-[85%]" />
+      </div>
+    </div>
+  );
+}
+
+function ActivitySkeleton() {
+  return (
+    <div className="space-y-0 divide-y">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} className="px-6 py-3">
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="mt-1 h-3 w-20" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CampaignRowSkeleton() {
+  return (
+    <div className="flex items-center justify-between rounded-lg border p-4">
+      <div className="space-y-2">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-3 w-56" />
+      </div>
+      <div className="flex items-center gap-3">
+        <Skeleton className="h-5 w-14 rounded-full" />
+        <Skeleton className="h-4 w-8" />
+      </div>
+    </div>
+  );
+}
 
 export default function DashboardPage() {
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [openTrend, setOpenTrend] = useState<OpensTrendItem[] | null>(null);
+  const [recentCampaigns, setRecentCampaigns] = useState<Campaign[] | null>(null);
+  const [activityFeed, setActivityFeed] = useState<ActivityItem[] | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchDashboardData() {
+      try {
+        const [statsData, campaignsData, activityData, opensData] =
+          await Promise.all([
+            getDashboardStats(),
+            getRecentCampaigns(),
+            getRecentActivity(),
+            getOpensOverTime(),
+          ]);
+
+        setStats(statsData);
+        setRecentCampaigns(campaignsData as Campaign[]);
+        setActivityFeed(activityData as ActivityItem[]);
+        setOpenTrend(opensData);
+      } catch (error) {
+        console.error("Failed to fetch dashboard data:", error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchDashboardData();
+  }, []);
+
+  const statCards = stats
+    ? [
+        {
+          label: "Total Sent",
+          value: stats.totalEmailsSent.toLocaleString(),
+          change: `${stats.totalCampaigns} campaign${stats.totalCampaigns !== 1 ? "s" : ""} total`,
+          icon: Send,
+          color: "text-blue-500",
+        },
+        {
+          label: "Open Rate",
+          value: `${stats.openRate}%`,
+          change: `${stats.activeRecipients.toLocaleString()} active recipients`,
+          icon: Eye,
+          color: "text-green-500",
+        },
+        {
+          label: "Click Rate",
+          value: `${stats.clickRate}%`,
+          change: stats.clickRate > 0 ? "Tracking clicks" : "No clicks yet",
+          icon: MousePointerClick,
+          color: "text-purple-500",
+        },
+        {
+          label: "Bounce Rate",
+          value: `${stats.bounceRate}%`,
+          change:
+            stats.bounceRate < 3
+              ? "Healthy"
+              : stats.bounceRate < 5
+                ? "Needs attention"
+                : "Critical",
+          icon: AlertTriangle,
+          color: "text-yellow-500",
+        },
+      ]
+    : [];
+
+  const formattedOpenTrend = openTrend
+    ? openTrend.map((item) => ({
+        ...item,
+        date: format(new Date(item.date), "MMM d"),
+      }))
+    : [];
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -149,20 +273,24 @@ export default function DashboardPage() {
 
       {/* Stat cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat) => (
-          <Card key={stat.label}>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-medium text-muted-foreground">
-                  {stat.label}
-                </p>
-                <stat.icon className={`h-4 w-4 ${stat.color}`} />
-              </div>
-              <p className="mt-2 text-3xl font-bold">{stat.value}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{stat.change}</p>
-            </CardContent>
-          </Card>
-        ))}
+        {loading
+          ? Array.from({ length: 4 }).map((_, i) => <StatCardSkeleton key={i} />)
+          : statCards.map((stat) => (
+              <Card key={stat.label}>
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium text-muted-foreground">
+                      {stat.label}
+                    </p>
+                    <stat.icon className={`h-4 w-4 ${stat.color}`} />
+                  </div>
+                  <p className="mt-2 text-3xl font-bold">{stat.value}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {stat.change}
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -175,23 +303,46 @@ export default function DashboardPage() {
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={openTrend}>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis dataKey="date" className="text-xs" tick={{ fontSize: 12 }} />
-                  <YAxis className="text-xs" tick={{ fontSize: 12 }} />
-                  <Tooltip />
-                  <Line
-                    type="monotone"
-                    dataKey="opens"
-                    stroke="hsl(var(--primary))"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+            {loading ? (
+              <ChartSkeleton />
+            ) : formattedOpenTrend.length === 0 ? (
+              <div className="h-[300px] flex items-center justify-center text-muted-foreground text-sm">
+                No data yet. Send your first campaign to see open trends.
+              </div>
+            ) : (
+              <div className="h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={formattedOpenTrend}>
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      className="stroke-border"
+                    />
+                    <XAxis
+                      dataKey="date"
+                      className="text-xs"
+                      tick={{ fontSize: 12 }}
+                    />
+                    <YAxis className="text-xs" tick={{ fontSize: 12 }} />
+                    <Tooltip />
+                    <Line
+                      type="monotone"
+                      dataKey="opens"
+                      stroke="hsl(var(--primary))"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="clicks"
+                      stroke="hsl(var(--muted-foreground))"
+                      strokeWidth={2}
+                      strokeDasharray="4 4"
+                      dot={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -204,16 +355,28 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent className="p-0">
             <ScrollArea className="h-[300px]">
-              <div className="space-y-0 divide-y">
-                {activityFeed.map((item, i) => (
-                  <div key={i} className="px-6 py-3">
-                    <p className="text-sm">{item.text}</p>
-                    <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                      <Clock className="h-3 w-3" /> {item.time}
-                    </p>
-                  </div>
-                ))}
-              </div>
+              {loading ? (
+                <ActivitySkeleton />
+              ) : !activityFeed || activityFeed.length === 0 ? (
+                <div className="flex h-[260px] items-center justify-center px-6 text-sm text-muted-foreground">
+                  No activity yet. Actions will appear here as you use the
+                  platform.
+                </div>
+              ) : (
+                <div className="space-y-0 divide-y">
+                  {activityFeed.map((item) => (
+                    <div key={item.id} className="px-6 py-3">
+                      <p className="text-sm">{formatActivityText(item)}</p>
+                      <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                        <Clock className="h-3 w-3" />{" "}
+                        {formatDistanceToNow(new Date(item.createdAt), {
+                          addSuffix: true,
+                        })}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </ScrollArea>
           </CardContent>
         </Card>
@@ -233,35 +396,67 @@ export default function DashboardPage() {
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            {recentCampaigns.map((campaign) => (
-              <div
-                key={campaign.name}
-                className="flex items-center justify-between rounded-lg border p-4"
-              >
-                <div>
-                  <p className="font-medium">{campaign.name}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {campaign.status === "scheduled"
-                      ? `Scheduled for ${campaign.date}`
-                      : `${campaign.sent.toLocaleString()} sent · ${campaign.opened.toLocaleString()} opened`}
-                  </p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <Badge
-                    variant={
-                      campaign.status === "sent" ? "default" : "secondary"
-                    }
-                  >
-                    {campaign.status}
-                  </Badge>
-                  {campaign.sent > 0 && (
-                    <span className="text-sm font-medium text-green-600">
-                      {Math.round((campaign.opened / campaign.sent) * 100)}%
-                    </span>
-                  )}
-                </div>
+            {loading ? (
+              Array.from({ length: 4 }).map((_, i) => (
+                <CampaignRowSkeleton key={i} />
+              ))
+            ) : !recentCampaigns || recentCampaigns.length === 0 ? (
+              <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
+                No campaigns yet. Create your first campaign to get started.
               </div>
-            ))}
+            ) : (
+              recentCampaigns.map((campaign) => {
+                const cache = campaign.statsCache as {
+                  sent?: number;
+                  opened?: number;
+                  clicked?: number;
+                  bounced?: number;
+                  total?: number;
+                } | null;
+                const sent = cache?.sent || 0;
+                const opened = cache?.opened || 0;
+
+                return (
+                  <div
+                    key={campaign.id}
+                    className="flex items-center justify-between rounded-lg border p-4"
+                  >
+                    <div>
+                      <p className="font-medium">{campaign.name}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {campaign.status === "scheduled"
+                          ? `Scheduled for ${campaign.scheduledAt ? format(new Date(campaign.scheduledAt), "MMM d, yyyy") : "TBD"}`
+                          : campaign.status === "draft"
+                            ? `Draft - created ${format(new Date(campaign.createdAt), "MMM d, yyyy")}`
+                            : campaign.status === "sending"
+                              ? "Currently sending..."
+                              : sent > 0
+                                ? `${sent.toLocaleString()} sent · ${opened.toLocaleString()} opened`
+                                : `Sent ${campaign.sentAt ? format(new Date(campaign.sentAt), "MMM d, yyyy") : ""}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Badge
+                        variant={
+                          campaign.status === "sent"
+                            ? "default"
+                            : campaign.status === "sending"
+                              ? "default"
+                              : "secondary"
+                        }
+                      >
+                        {campaign.status}
+                      </Badge>
+                      {sent > 0 && (
+                        <span className="text-sm font-medium text-green-600">
+                          {Math.round((opened / sent) * 100)}%
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </CardContent>
       </Card>
@@ -274,29 +469,85 @@ export default function DashboardPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="flex items-center gap-3 rounded-lg border p-4">
-              <div className="h-3 w-3 rounded-full bg-green-500" />
-              <div>
-                <p className="text-sm font-medium">Bounce Rate</p>
-                <p className="text-xs text-muted-foreground">1.2% — Healthy</p>
-              </div>
+          {loading ? (
+            <div className="grid gap-4 sm:grid-cols-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="flex items-center gap-3 rounded-lg border p-4"
+                >
+                  <Skeleton className="h-3 w-3 rounded-full" />
+                  <div className="space-y-1">
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-3 w-32" />
+                  </div>
+                </div>
+              ))}
             </div>
-            <div className="flex items-center gap-3 rounded-lg border p-4">
-              <div className="h-3 w-3 rounded-full bg-green-500" />
-              <div>
-                <p className="text-sm font-medium">Open Rate</p>
-                <p className="text-xs text-muted-foreground">70% — Excellent</p>
-              </div>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-3">
+              {(() => {
+                const bounceHealth = getHealthIndicator(
+                  stats?.bounceRate ?? 0,
+                  "bounce"
+                );
+                const openHealth = getHealthIndicator(
+                  stats?.openRate ?? 0,
+                  "open"
+                );
+                // Complaint rate is not tracked in stats, so we show N/A or derive from bounce
+                const complaintRate = 0;
+                const complaintHealth = getHealthIndicator(
+                  complaintRate,
+                  "complaint"
+                );
+
+                return (
+                  <>
+                    <div className="flex items-center gap-3 rounded-lg border p-4">
+                      <div
+                        className={`h-3 w-3 rounded-full ${bounceHealth.color}`}
+                      />
+                      <div>
+                        <p className="text-sm font-medium">Bounce Rate</p>
+                        <p className="text-xs text-muted-foreground">
+                          {stats?.bounceRate ?? 0}% &mdash; {bounceHealth.label}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 rounded-lg border p-4">
+                      <div
+                        className={`h-3 w-3 rounded-full ${openHealth.color}`}
+                      />
+                      <div>
+                        <p className="text-sm font-medium">Open Rate</p>
+                        <p className="text-xs text-muted-foreground">
+                          {stats?.openRate ?? 0}% &mdash; {openHealth.label}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 rounded-lg border p-4">
+                      <div
+                        className={`h-3 w-3 rounded-full ${complaintHealth.color}`}
+                      />
+                      <div>
+                        <p className="text-sm font-medium">Complaint Rate</p>
+                        <p className="text-xs text-muted-foreground">
+                          {stats?.totalEmailsSent
+                            ? `${complaintRate}%`
+                            : "N/A"}{" "}
+                          &mdash;{" "}
+                          {stats?.totalEmailsSent
+                            ? complaintHealth.label
+                            : "No data"}
+                        </p>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
-            <div className="flex items-center gap-3 rounded-lg border p-4">
-              <div className="h-3 w-3 rounded-full bg-green-500" />
-              <div>
-                <p className="text-sm font-medium">Complaint Rate</p>
-                <p className="text-xs text-muted-foreground">0.01% — Healthy</p>
-              </div>
-            </div>
-          </div>
+          )}
         </CardContent>
       </Card>
     </div>

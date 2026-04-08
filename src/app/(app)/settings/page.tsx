@@ -1,13 +1,86 @@
 "use client";
 
-import { Building2, Save } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Building2, Save, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useSession, organization } from "@/lib/auth-client";
 
 export default function SettingsPage() {
+  const { data: session, isPending: sessionPending } = useSession();
+
+  const [orgName, setOrgName] = useState("");
+  const [orgSlug, setOrgSlug] = useState("");
+  const [fromEmail, setFromEmail] = useState("");
+  const [replyTo, setReplyTo] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadOrg() {
+      try {
+        const res = await organization.getFullOrganization();
+        if (res?.data) {
+          setOrgName(res.data.name || "");
+          setOrgSlug(res.data.slug || "");
+        }
+      } catch {
+        // Org may not be loaded yet
+      } finally {
+        setLoading(false);
+      }
+    }
+    if (!sessionPending && session) {
+      loadOrg();
+    }
+  }, [session, sessionPending]);
+
+  async function handleSave() {
+    setSaving(true);
+    setSaved(false);
+    try {
+      await organization.update({
+        data: { name: orgName },
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch {
+      // Update may not be supported depending on permissions
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (sessionPending || loading) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <Skeleton className="h-8 w-40" />
+          <Skeleton className="mt-2 h-4 w-64" />
+        </div>
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-6 w-48" />
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid gap-6 sm:grid-cols-2">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+            <Separator />
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -28,11 +101,15 @@ export default function SettingsPage() {
           <div className="grid gap-6 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="orgName">Organisation Name</Label>
-              <Input id="orgName" defaultValue="Skcript Technologies" />
+              <Input
+                id="orgName"
+                value={orgName}
+                onChange={(e) => setOrgName(e.target.value)}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="orgSlug">Slug</Label>
-              <Input id="orgSlug" defaultValue="skcript" disabled />
+              <Input id="orgSlug" value={orgSlug} disabled />
             </div>
           </div>
 
@@ -43,7 +120,9 @@ export default function SettingsPage() {
             <Input
               id="fromEmail"
               type="email"
-              defaultValue="hello@skcript.com"
+              value={fromEmail}
+              onChange={(e) => setFromEmail(e.target.value)}
+              placeholder="hello@company.com"
             />
             <p className="text-xs text-muted-foreground">
               Used as the default sender address for campaigns
@@ -55,12 +134,19 @@ export default function SettingsPage() {
             <Input
               id="replyTo"
               type="email"
-              defaultValue="support@skcript.com"
+              value={replyTo}
+              onChange={(e) => setReplyTo(e.target.value)}
+              placeholder="support@company.com"
             />
           </div>
 
-          <Button>
-            <Save className="mr-2 h-4 w-4" /> Save Changes
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="mr-2 h-4 w-4" />
+            )}
+            {saved ? "Saved!" : "Save Changes"}
           </Button>
         </CardContent>
       </Card>

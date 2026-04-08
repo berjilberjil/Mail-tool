@@ -1,32 +1,170 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import { Plus, FileText, MoreHorizontal, Copy, Trash2, Pencil } from "lucide-react";
+import { Plus, FileText, MoreHorizontal, Copy, Trash2, Pencil, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogTrigger,
+  DialogClose,
+} from "@/components/ui/dialog";
+import {
+  getTemplates,
+  getGalleryTemplates,
+  createTemplate,
+  deleteTemplate,
+  duplicateTemplate,
+  seedGalleryTemplates,
+} from "@/lib/actions/templates";
 
-const galleryTemplates = [
-  { id: "g1", name: "Product Launch", description: "Clean layout for product announcements", isGallery: true },
-  { id: "g2", name: "Newsletter", description: "Multi-section monthly updates", isGallery: true },
-  { id: "g3", name: "Event Invite", description: "CTA-focused for webinars & events", isGallery: true },
-  { id: "g4", name: "Welcome Email", description: "Onboarding for new users", isGallery: true },
-  { id: "g5", name: "Plain Text", description: "Simple text-based email", isGallery: true },
-];
-
-const myTemplates = [
-  { id: "t1", name: "Q2 Launch Template", description: "Custom template for Q2 product launch", updatedAt: "Apr 3, 2026" },
-  { id: "t2", name: "Weekly Digest", description: "Weekly update email for subscribers", updatedAt: "Mar 28, 2026" },
-  { id: "t3", name: "Sales Outreach v2", description: "Personal outreach template for sales team", updatedAt: "Mar 20, 2026" },
-];
+type Template = {
+  id: string;
+  orgId: string;
+  createdBy: string;
+  name: string;
+  subject: string;
+  contentJson: unknown;
+  contentHtml: string | null;
+  isGallery: boolean;
+  thumbnailUrl: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
 
 export default function TemplatesPage() {
+  const [galleryTemplates, setGalleryTemplates] = useState<Template[]>([]);
+  const [myTemplates, setMyTemplates] = useState<Template[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newSubject, setNewSubject] = useState("");
+
+  async function fetchData() {
+    try {
+      await seedGalleryTemplates();
+      const [gallery, custom] = await Promise.all([
+        getGalleryTemplates(),
+        getTemplates(),
+      ]);
+      setGalleryTemplates(gallery as Template[]);
+      setMyTemplates(custom as Template[]);
+    } catch (err) {
+      console.error("Failed to load templates:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  async function handleCreate() {
+    if (!newName.trim() || !newSubject.trim()) return;
+    setCreating(true);
+    try {
+      await createTemplate({ name: newName.trim(), subject: newSubject.trim() });
+      setNewName("");
+      setNewSubject("");
+      setCreateOpen(false);
+      const custom = await getTemplates();
+      setMyTemplates(custom as Template[]);
+    } catch (err) {
+      console.error("Failed to create template:", err);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleDuplicate(id: string) {
+    try {
+      await duplicateTemplate(id);
+      const custom = await getTemplates();
+      setMyTemplates(custom as Template[]);
+    } catch (err) {
+      console.error("Failed to duplicate template:", err);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    try {
+      await deleteTemplate(id);
+      const custom = await getTemplates();
+      setMyTemplates(custom as Template[]);
+    } catch (err) {
+      console.error("Failed to delete template:", err);
+    }
+  }
+
+  function formatDate(date: Date) {
+    return new Date(date).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-8">
+        <div className="flex items-center justify-between">
+          <div>
+            <Skeleton className="h-8 w-40" />
+            <Skeleton className="mt-2 h-4 w-72" />
+          </div>
+          <Skeleton className="h-10 w-36" />
+        </div>
+        <div>
+          <Skeleton className="mb-4 h-6 w-40" />
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Card key={i}>
+                <CardContent className="p-4">
+                  <Skeleton className="mb-3 h-40 w-full rounded-md" />
+                  <Skeleton className="h-5 w-32" />
+                  <Skeleton className="mt-2 h-3 w-full" />
+                  <Skeleton className="mt-3 h-8 w-full" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+        <div>
+          <Skeleton className="mb-4 h-6 w-32" />
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Card key={i}>
+                <CardContent className="p-4">
+                  <Skeleton className="mb-3 h-40 w-full rounded-md" />
+                  <Skeleton className="h-5 w-40" />
+                  <Skeleton className="mt-2 h-3 w-full" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -37,41 +175,94 @@ export default function TemplatesPage() {
             Pre-built and custom email templates for your campaigns
           </p>
         </div>
-        <Link href="/templates/new">
-          <Button>
-            <Plus className="mr-2 h-4 w-4" /> New Template
-          </Button>
-        </Link>
+        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <DialogTrigger
+            render={
+              <Button>
+                <Plus className="mr-2 h-4 w-4" /> New Template
+              </Button>
+            }
+          />
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Create Template</DialogTitle>
+              <DialogDescription>
+                Create a new email template. You can edit the content later.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="template-name">Name</Label>
+                <Input
+                  id="template-name"
+                  placeholder="e.g. Monthly Newsletter"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="template-subject">Subject Line</Label>
+                <Input
+                  id="template-subject"
+                  placeholder="e.g. Your monthly update from {{company}}"
+                  value={newSubject}
+                  onChange={(e) => setNewSubject(e.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <DialogClose render={<Button variant="outline" />}>
+                Cancel
+              </DialogClose>
+              <Button
+                onClick={handleCreate}
+                disabled={creating || !newName.trim() || !newSubject.trim()}
+              >
+                {creating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Create
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {/* Gallery */}
       <div>
         <h2 className="mb-4 text-lg font-semibold">Template Gallery</h2>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-          {galleryTemplates.map((t) => (
-            <Card key={t.id} className="group relative overflow-hidden">
-              <CardContent className="p-4">
-                <div className="mb-3 flex h-40 items-center justify-center rounded-md bg-muted">
-                  <FileText className="h-10 w-10 text-muted-foreground" />
-                </div>
-                <p className="font-medium">{t.name}</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {t.description}
-                </p>
-                <Badge variant="secondary" className="mt-2">
-                  Gallery
-                </Badge>
-                <div className="mt-3">
-                  <Link href={`/templates/new?from=${t.id}`}>
-                    <Button variant="outline" size="sm" className="w-full">
-                      Use Template
-                    </Button>
-                  </Link>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        {galleryTemplates.length === 0 ? (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center p-12">
+              <FileText className="mb-3 h-10 w-10 text-muted-foreground" />
+              <p className="font-medium">No gallery templates available</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {galleryTemplates.map((t) => (
+              <Card key={t.id} className="group relative overflow-hidden">
+                <CardContent className="p-4">
+                  <div className="mb-3 flex h-40 items-center justify-center rounded-md bg-muted">
+                    <FileText className="h-10 w-10 text-muted-foreground" />
+                  </div>
+                  <p className="font-medium">{t.name}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {t.subject}
+                  </p>
+                  <Badge variant="secondary" className="mt-2">
+                    Gallery
+                  </Badge>
+                  <div className="mt-3">
+                    <Link href={`/templates/new?from=${t.id}`}>
+                      <Button variant="outline" size="sm" className="w-full">
+                        Use Template
+                      </Button>
+                    </Link>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* My Templates */}
@@ -85,11 +276,9 @@ export default function TemplatesPage() {
               <p className="mt-1 text-sm text-muted-foreground">
                 Create your first template or customize one from the gallery.
               </p>
-              <Link href="/templates/new" className="mt-4">
-                <Button>
-                  <Plus className="mr-2 h-4 w-4" /> Create Template
-                </Button>
-              </Link>
+              <Button className="mt-4" onClick={() => setCreateOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" /> Create Template
+              </Button>
             </CardContent>
           </Card>
         ) : (
@@ -104,10 +293,10 @@ export default function TemplatesPage() {
                     <div>
                       <p className="font-medium">{t.name}</p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {t.description}
+                        {t.subject}
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Updated {t.updatedAt}
+                        Updated {formatDate(t.updatedAt)}
                       </p>
                     </div>
                     <DropdownMenu>
@@ -115,13 +304,18 @@ export default function TemplatesPage() {
                         <MoreHorizontal className="h-4 w-4" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem>
-                          <Pencil className="mr-2 h-4 w-4" /> Edit
-                        </DropdownMenuItem>
-                        <DropdownMenuItem>
+                        <Link href={`/templates/${t.id}/edit`}>
+                          <DropdownMenuItem>
+                            <Pencil className="mr-2 h-4 w-4" /> Edit
+                          </DropdownMenuItem>
+                        </Link>
+                        <DropdownMenuItem onClick={() => handleDuplicate(t.id)}>
                           <Copy className="mr-2 h-4 w-4" /> Duplicate
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="text-destructive">
+                        <DropdownMenuItem
+                          className="text-destructive"
+                          onClick={() => handleDelete(t.id)}
+                        >
                           <Trash2 className="mr-2 h-4 w-4" /> Delete
                         </DropdownMenuItem>
                       </DropdownMenuContent>

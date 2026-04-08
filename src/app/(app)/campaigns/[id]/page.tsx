@@ -1,6 +1,9 @@
 "use client";
 
+import { useState, useEffect } from "react";
+import { useParams } from "next/navigation";
 import Link from "next/link";
+import { format } from "date-fns";
 import {
   ArrowLeft,
   Send,
@@ -12,6 +15,7 @@ import {
   Clock,
   Building2,
   TrendingUp,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,53 +38,20 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import {
+  getCampaign,
+  getCampaignStats,
+  getCampaignRecipients,
+  getCampaignOrgRollup,
+  getCampaignTimeline,
+  duplicateCampaign,
+} from "@/lib/actions/campaigns";
 
-const campaignStats = [
-  { label: "Sent", value: "2,400", icon: Send, color: "text-blue-500" },
-  { label: "Opened", value: "1,680", icon: Eye, color: "text-green-500" },
-  { label: "Clicked", value: "620", icon: MousePointerClick, color: "text-purple-500" },
-  { label: "Bounced", value: "20", icon: AlertTriangle, color: "text-red-500" },
-];
-
-const opensOverTime = [
-  { time: "12:00", opens: 45 },
-  { time: "13:00", opens: 180 },
-  { time: "14:00", opens: 320 },
-  { time: "15:00", opens: 280 },
-  { time: "16:00", opens: 220 },
-  { time: "17:00", opens: 180 },
-  { time: "18:00", opens: 150 },
-  { time: "19:00", opens: 120 },
-  { time: "20:00", opens: 95 },
-  { time: "21:00", opens: 50 },
-  { time: "22:00", opens: 30 },
-  { time: "23:00", opens: 10 },
-];
-
-const individualOpens = [
-  { name: "Priya Sharma", email: "priya@infosys.com", org: "Infosys", openedAt: "Apr 5, 2:14 PM", opens: 3, clicked: true, engagement: "hot" },
-  { name: "Rahul Mehta", email: "rahul@tata.com", org: "Tata", openedAt: "Apr 5, 2:22 PM", opens: 2, clicked: true, engagement: "hot" },
-  { name: "Ananya Rao", email: "ananya@zoho.com", org: "Zoho", openedAt: "Apr 5, 2:45 PM", opens: 1, clicked: false, engagement: "warm" },
-  { name: "Karthik Nair", email: "karthik@freshworks.com", org: "Freshworks", openedAt: "Apr 5, 3:10 PM", opens: 1, clicked: true, engagement: "warm" },
-  { name: "Deepa Iyer", email: "deepa@hcl.com", org: "HCL", openedAt: "Apr 5, 3:32 PM", opens: 2, clicked: false, engagement: "warm" },
-  { name: "Vikram Singh", email: "vikram@wipro.com", org: "Wipro", openedAt: "Apr 5, 4:01 PM", opens: 1, clicked: false, engagement: "cold" },
-  { name: "Meera Pillai", email: "meera@infosys.com", org: "Infosys", openedAt: "Apr 5, 4:18 PM", opens: 1, clicked: true, engagement: "warm" },
-  { name: "Amit Patel", email: "amit@tata.com", org: "Tata", openedAt: "Apr 5, 5:05 PM", opens: 1, clicked: false, engagement: "cold" },
-];
-
-const orgRollup = [
-  { org: "Infosys", total: 8, opened: 6, firstOpen: "Apr 5, 2:14 PM", lastOpen: "Apr 5, 6:45 PM", rate: 75 },
-  { org: "Tata", total: 12, opened: 8, firstOpen: "Apr 5, 2:22 PM", lastOpen: "Apr 5, 7:10 PM", rate: 67 },
-  { org: "Zoho", total: 5, opened: 3, firstOpen: "Apr 5, 2:45 PM", lastOpen: "Apr 5, 5:30 PM", rate: 60 },
-  { org: "Freshworks", total: 6, opened: 4, firstOpen: "Apr 5, 3:10 PM", lastOpen: "Apr 5, 6:00 PM", rate: 67 },
-  { org: "HCL", total: 4, opened: 2, firstOpen: "Apr 5, 3:32 PM", lastOpen: "Apr 5, 4:50 PM", rate: 50 },
-  { org: "Wipro", total: 10, opened: 5, firstOpen: "Apr 5, 4:01 PM", lastOpen: "Apr 5, 8:20 PM", rate: 50 },
-];
-
-const bounceList = [
-  { email: "old@defunct.com", type: "hard", reason: "Mailbox does not exist" },
-  { email: "temp@expired.org", type: "soft", reason: "Mailbox full" },
-];
+type Campaign = NonNullable<Awaited<ReturnType<typeof getCampaign>>>;
+type Stats = Awaited<ReturnType<typeof getCampaignStats>>;
+type Recipient = Awaited<ReturnType<typeof getCampaignRecipients>>[number];
+type OrgRow = Awaited<ReturnType<typeof getCampaignOrgRollup>>[number];
+type TimelineRow = Awaited<ReturnType<typeof getCampaignTimeline>>[number];
 
 const engagementColor: Record<string, string> = {
   hot: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
@@ -88,7 +59,148 @@ const engagementColor: Record<string, string> = {
   cold: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
 };
 
+function engagementLabel(score: number | null): string {
+  if (score === null || score === undefined) return "cold";
+  if (score >= 70) return "hot";
+  if (score >= 30) return "warm";
+  return "cold";
+}
+
+const statusColor: Record<string, string> = {
+  sent: "default",
+  draft: "secondary",
+  scheduled: "outline",
+  sending: "default",
+  paused: "secondary",
+  failed: "destructive",
+};
+
 export default function CampaignDetailPage() {
+  const params = useParams();
+  const campaignId = params.id as string;
+
+  const [campaign, setCampaign] = useState<Campaign | null>(null);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [recipients, setRecipients] = useState<Recipient[]>([]);
+  const [orgRollup, setOrgRollup] = useState<OrgRow[]>([]);
+  const [timeline, setTimeline] = useState<TimelineRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!campaignId) return;
+
+    const fetchAll = async () => {
+      try {
+        const [campaignData, statsData, recipientsData, orgData, timelineData] =
+          await Promise.all([
+            getCampaign(campaignId),
+            getCampaignStats(campaignId),
+            getCampaignRecipients(campaignId),
+            getCampaignOrgRollup(campaignId),
+            getCampaignTimeline(campaignId),
+          ]);
+
+        setCampaign(campaignData);
+        setStats(statsData);
+        setRecipients(recipientsData);
+        setOrgRollup(orgData);
+        setTimeline(timelineData);
+      } catch (err) {
+        console.error("Failed to fetch campaign data:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAll();
+  }, [campaignId]);
+
+  const handleDuplicate = async () => {
+    try {
+      await duplicateCampaign(campaignId);
+    } catch (err) {
+      console.error("Failed to duplicate campaign:", err);
+    }
+  };
+
+  const formatDateTime = (date: Date | string | null) => {
+    if (!date) return "\u2014";
+    return format(new Date(date), "MMM d, h:mm a");
+  };
+
+  const formatFullDateTime = (date: Date | string | null) => {
+    if (!date) return "\u2014";
+    return format(new Date(date), "MMM d, yyyy 'at' h:mm a");
+  };
+
+  const chartData = timeline.map((t) => ({
+    time: format(new Date(t.hour), "h:mm a"),
+    opens: t.opens,
+    clicks: t.clicks,
+  }));
+
+  const openedRecipients = recipients.filter((r) => r.openCount > 0);
+  const bouncedRecipients = recipients.filter((r) => r.status === "bounced");
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-32">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!campaign) {
+    return (
+      <div className="flex flex-col items-center justify-center py-32 text-muted-foreground">
+        <p>Campaign not found.</p>
+        <Link href="/campaigns" className="mt-4">
+          <Button variant="outline">Back to Campaigns</Button>
+        </Link>
+      </div>
+    );
+  }
+
+  const openRate =
+    stats && stats.sent > 0
+      ? Math.round((stats.opened / stats.sent) * 100)
+      : 0;
+  const clickRate =
+    stats && stats.sent > 0
+      ? Math.round((stats.clicked / stats.sent) * 100)
+      : 0;
+  const bounceRate =
+    stats && stats.sent > 0
+      ? ((stats.bounced / stats.sent) * 100).toFixed(1)
+      : "0";
+
+  const campaignStats = [
+    {
+      label: "Sent",
+      value: stats?.sent?.toLocaleString() ?? "0",
+      icon: Send,
+      color: "text-blue-500",
+    },
+    {
+      label: "Opened",
+      value: stats?.opened?.toLocaleString() ?? "0",
+      icon: Eye,
+      color: "text-green-500",
+    },
+    {
+      label: "Clicked",
+      value: stats?.clicked?.toLocaleString() ?? "0",
+      icon: MousePointerClick,
+      color: "text-purple-500",
+    },
+    {
+      label: "Bounced",
+      value: stats?.bounced?.toLocaleString() ?? "0",
+      icon: AlertTriangle,
+      color: "text-red-500",
+    },
+  ];
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -100,12 +212,32 @@ export default function CampaignDetailPage() {
             </Button>
           </Link>
           <div>
-            <h1 className="text-2xl font-bold">Q2 Product Launch</h1>
+            <h1 className="text-2xl font-bold">{campaign.name}</h1>
             <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
-              <Badge variant="default">sent</Badge>
-              <span>Sent on Apr 5, 2026 at 2:00 PM</span>
-              <span>·</span>
-              <span>by Varun Raj</span>
+              <Badge
+                variant={
+                  statusColor[campaign.status] as
+                    | "default"
+                    | "secondary"
+                    | "outline"
+                    | "destructive"
+                }
+              >
+                {campaign.status}
+              </Badge>
+              {campaign.sentAt && (
+                <span>Sent on {formatFullDateTime(campaign.sentAt)}</span>
+              )}
+              {!campaign.sentAt && campaign.scheduledAt && (
+                <span>
+                  Scheduled for {formatFullDateTime(campaign.scheduledAt)}
+                </span>
+              )}
+              {!campaign.sentAt && !campaign.scheduledAt && (
+                <span>
+                  Created {formatFullDateTime(campaign.createdAt)}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -113,7 +245,7 @@ export default function CampaignDetailPage() {
           <Button variant="outline" size="sm">
             <Download className="mr-2 h-4 w-4" /> Export CSV
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={handleDuplicate}>
             <Copy className="mr-2 h-4 w-4" /> Duplicate
           </Button>
           <Button size="sm">
@@ -135,13 +267,19 @@ export default function CampaignDetailPage() {
               </div>
               <p className="mt-2 text-3xl font-bold">{stat.value}</p>
               {stat.label === "Opened" && (
-                <p className="mt-1 text-xs text-green-600">70% open rate</p>
+                <p className="mt-1 text-xs text-green-600">
+                  {openRate}% open rate
+                </p>
               )}
               {stat.label === "Clicked" && (
-                <p className="mt-1 text-xs text-purple-600">26% click rate</p>
+                <p className="mt-1 text-xs text-purple-600">
+                  {clickRate}% click rate
+                </p>
               )}
               {stat.label === "Bounced" && (
-                <p className="mt-1 text-xs text-muted-foreground">0.8% bounce rate</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {bounceRate}% bounce rate
+                </p>
               )}
             </CardContent>
           </Card>
@@ -175,23 +313,32 @@ export default function CampaignDetailPage() {
               <TrendingUp className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="h-[350px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={opensOverTime}>
-                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                    <XAxis dataKey="time" tick={{ fontSize: 12 }} />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip />
-                    <Line
-                      type="monotone"
-                      dataKey="opens"
-                      stroke="hsl(var(--primary))"
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+              {chartData.length === 0 ? (
+                <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
+                  No timeline data available yet.
+                </div>
+              ) : (
+                <div className="h-[350px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData}>
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        className="stroke-border"
+                      />
+                      <XAxis dataKey="time" tick={{ fontSize: 12 }} />
+                      <YAxis tick={{ fontSize: 12 }} />
+                      <Tooltip />
+                      <Line
+                        type="monotone"
+                        dataKey="opens"
+                        stroke="hsl(var(--primary))"
+                        strokeWidth={2}
+                        dot={false}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -200,54 +347,80 @@ export default function CampaignDetailPage() {
         <TabsContent value="recipients">
           <Card>
             <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Organisation</TableHead>
-                    <TableHead>Opened At</TableHead>
-                    <TableHead className="text-center">Opens</TableHead>
-                    <TableHead className="text-center">Clicked</TableHead>
-                    <TableHead>Engagement</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {individualOpens.map((r) => (
-                    <TableRow key={r.email}>
-                      <TableCell className="font-medium">{r.name}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {r.email}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{r.org}</Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        <div className="flex items-center gap-1">
-                          <Clock className="h-3 w-3" /> {r.openedAt}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-center">{r.opens}</TableCell>
-                      <TableCell className="text-center">
-                        {r.clicked ? (
-                          <MousePointerClick className="mx-auto h-4 w-4 text-purple-500" />
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <span
-                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                            engagementColor[r.engagement]
-                          }`}
-                        >
-                          {r.engagement}
-                        </span>
-                      </TableCell>
+              {openedRecipients.length === 0 ? (
+                <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
+                  No opens recorded yet.
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Organisation</TableHead>
+                      <TableHead>Opened At</TableHead>
+                      <TableHead className="text-center">Opens</TableHead>
+                      <TableHead className="text-center">Clicked</TableHead>
+                      <TableHead>Engagement</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {openedRecipients.map((r) => {
+                      const engagement = engagementLabel(r.recipientEngagement);
+                      return (
+                        <TableRow key={r.id}>
+                          <TableCell className="font-medium">
+                            {[r.recipientFirstName, r.recipientLastName]
+                              .filter(Boolean)
+                              .join(" ") || "\u2014"}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {r.recipientEmail}
+                          </TableCell>
+                          <TableCell>
+                            {r.recipientCompany ? (
+                              <Badge variant="outline">
+                                {r.recipientCompany}
+                              </Badge>
+                            ) : (
+                              <span className="text-muted-foreground">
+                                \u2014
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            <div className="flex items-center gap-1">
+                              <Clock className="h-3 w-3" />{" "}
+                              {formatDateTime(r.firstOpenedAt)}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {r.openCount}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {r.clickCount > 0 ? (
+                              <MousePointerClick className="mx-auto h-4 w-4 text-purple-500" />
+                            ) : (
+                              <span className="text-muted-foreground">
+                                \u2014
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <span
+                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                                engagementColor[engagement] || engagementColor.cold
+                              }`}
+                            >
+                              {engagement}
+                            </span>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -256,51 +429,71 @@ export default function CampaignDetailPage() {
         <TabsContent value="orgs">
           <Card>
             <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Organisation</TableHead>
-                    <TableHead className="text-center">Total Recipients</TableHead>
-                    <TableHead className="text-center">Opened</TableHead>
-                    <TableHead>First Open</TableHead>
-                    <TableHead>Last Open</TableHead>
-                    <TableHead className="text-center">Open Rate</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {orgRollup.map((org) => (
-                    <TableRow key={org.org}>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Building2 className="h-4 w-4 text-muted-foreground" />
-                          <span className="font-medium">{org.org}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-center">{org.total}</TableCell>
-                      <TableCell className="text-center">{org.opened}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {org.firstOpen}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {org.lastOpen}
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <span
-                          className={`font-medium ${
-                            org.rate >= 70
-                              ? "text-green-600"
-                              : org.rate >= 50
-                              ? "text-yellow-600"
-                              : "text-red-600"
-                          }`}
-                        >
-                          {org.rate}%
-                        </span>
-                      </TableCell>
+              {orgRollup.length === 0 ? (
+                <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
+                  No organisation data available.
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Organisation</TableHead>
+                      <TableHead className="text-center">
+                        Total Recipients
+                      </TableHead>
+                      <TableHead className="text-center">Opened</TableHead>
+                      <TableHead>First Open</TableHead>
+                      <TableHead>Last Open</TableHead>
+                      <TableHead className="text-center">Open Rate</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {orgRollup.map((org) => {
+                      const rate =
+                        org.total > 0
+                          ? Math.round((org.opened / org.total) * 100)
+                          : 0;
+                      return (
+                        <TableRow key={org.company}>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <Building2 className="h-4 w-4 text-muted-foreground" />
+                              <span className="font-medium">
+                                {org.company || "Unknown"}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {org.total}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {org.opened}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {formatDateTime(org.firstOpen)}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {formatDateTime(org.lastOpen)}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <span
+                              className={`font-medium ${
+                                rate >= 70
+                                  ? "text-green-600"
+                                  : rate >= 50
+                                  ? "text-yellow-600"
+                                  : "text-red-600"
+                              }`}
+                            >
+                              {rate}%
+                            </span>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -309,34 +502,44 @@ export default function CampaignDetailPage() {
         <TabsContent value="bounces">
           <Card>
             <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Reason</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {bounceList.map((b) => (
-                    <TableRow key={b.email}>
-                      <TableCell className="font-medium">{b.email}</TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            b.type === "hard" ? "destructive" : "secondary"
-                          }
-                        >
-                          {b.type}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {b.reason}
-                      </TableCell>
+              {bouncedRecipients.length === 0 ? (
+                <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
+                  No bounces recorded.
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Bounced At</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {bouncedRecipients.map((b) => (
+                      <TableRow key={b.id}>
+                        <TableCell className="font-medium">
+                          {b.recipientEmail}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={
+                              b.bounceType === "hard"
+                                ? "destructive"
+                                : "secondary"
+                            }
+                          >
+                            {b.bounceType || "unknown"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {formatDateTime(b.bouncedAt)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

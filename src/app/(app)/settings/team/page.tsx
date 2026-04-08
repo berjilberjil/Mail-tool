@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import {
   UserPlus,
   MoreHorizontal,
@@ -7,6 +8,7 @@ import {
   ShieldCheck,
   Crown,
   Trash2,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,17 +31,26 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { getTeamMembers, getPendingInvitations } from "@/lib/actions/team";
+import { format } from "date-fns";
 
-const members = [
-  { name: "Varun Raj", email: "varun@skcript.com", role: "owner", initials: "VR", joinedAt: "Jan 2026" },
-  { name: "Priya S", email: "priya@skcript.com", role: "admin", initials: "PS", joinedAt: "Feb 2026" },
-  { name: "Karthik M", email: "karthik@skcript.com", role: "member", initials: "KM", joinedAt: "Mar 2026" },
-  { name: "Deepa R", email: "deepa@skcript.com", role: "member", initials: "DR", joinedAt: "Mar 2026" },
-];
+type TeamMember = {
+  memberId: string;
+  role: string;
+  joinedAt: Date | null;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  userImage: string | null;
+};
 
-const pendingInvites = [
-  { email: "rahul@skcript.com", role: "member", invitedAt: "Apr 5, 2026" },
-];
+type PendingInvitation = {
+  id: string;
+  email: string;
+  role: string | null;
+  status: string;
+};
 
 const roleIcons: Record<string, typeof Shield> = {
   owner: Crown,
@@ -53,7 +64,83 @@ const roleColors: Record<string, string> = {
   member: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400",
 };
 
+function getInitials(name: string): string {
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+}
+
 export default function TeamSettingsPage() {
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<PendingInvitation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    async function loadTeam() {
+      try {
+        const [membersData, invitesData] = await Promise.all([
+          getTeamMembers(),
+          getPendingInvitations(),
+        ]);
+        setMembers(membersData as TeamMember[]);
+        setPendingInvites(invitesData as PendingInvitation[]);
+      } catch (err) {
+        setError("Failed to load team data.");
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadTeam();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <Skeleton className="h-6 w-36" />
+            <Skeleton className="h-9 w-32" />
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between rounded-lg border p-4"
+                >
+                  <div className="flex items-center gap-3">
+                    <Skeleton className="h-10 w-10 rounded-full" />
+                    <div className="space-y-1">
+                      <Skeleton className="h-4 w-28" />
+                      <Skeleton className="h-3 w-40" />
+                    </div>
+                  </div>
+                  <Skeleton className="h-5 w-16" />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardContent className="py-8 text-center">
+            <p className="text-sm text-destructive">{error}</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Invite */}
@@ -98,55 +185,75 @@ export default function TeamSettingsPage() {
           </Dialog>
         </CardHeader>
         <CardContent>
-          <div className="space-y-3">
-            {members.map((member) => {
-              const RoleIcon = roleIcons[member.role];
-              return (
-                <div
-                  key={member.email}
-                  className="flex items-center justify-between rounded-lg border p-4"
-                >
-                  <div className="flex items-center gap-3">
-                    <Avatar>
-                      <AvatarFallback>{member.initials}</AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <p className="font-medium">{member.name}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {member.email}
-                      </p>
+          {members.length === 0 ? (
+            <div className="py-8 text-center">
+              <p className="text-sm text-muted-foreground">
+                No team members found. Invite someone to get started.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {members.map((member) => {
+                const role = member.role || "member";
+                const RoleIcon = roleIcons[role] || Shield;
+                const initials = member.userName
+                  ? getInitials(member.userName)
+                  : "??";
+                const joinedFormatted = member.joinedAt
+                  ? format(new Date(member.joinedAt), "MMM yyyy")
+                  : "";
+
+                return (
+                  <div
+                    key={member.memberId}
+                    className="flex items-center justify-between rounded-lg border p-4"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Avatar>
+                        <AvatarFallback>{initials}</AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <p className="font-medium">
+                          {member.userName || "Unknown"}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          {member.userEmail}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                          roleColors[role] || roleColors.member
+                        }`}
+                      >
+                        <RoleIcon className="h-3 w-3" />
+                        {role}
+                      </span>
+                      {joinedFormatted && (
+                        <span className="text-xs text-muted-foreground">
+                          Joined {joinedFormatted}
+                        </span>
+                      )}
+                      {role !== "owner" && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent cursor-pointer">
+                            <MoreHorizontal className="h-4 w-4" />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem>Change Role</DropdownMenuItem>
+                            <DropdownMenuItem className="text-destructive">
+                              <Trash2 className="mr-2 h-4 w-4" /> Remove
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                        roleColors[member.role]
-                      }`}
-                    >
-                      <RoleIcon className="h-3 w-3" />
-                      {member.role}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      Joined {member.joinedAt}
-                    </span>
-                    {member.role !== "owner" && (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-accent cursor-pointer">
-                          <MoreHorizontal className="h-4 w-4" />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem>Change Role</DropdownMenuItem>
-                          <DropdownMenuItem className="text-destructive">
-                            <Trash2 className="mr-2 h-4 w-4" /> Remove
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -160,13 +267,13 @@ export default function TeamSettingsPage() {
             <div className="space-y-3">
               {pendingInvites.map((invite) => (
                 <div
-                  key={invite.email}
+                  key={invite.id}
                   className="flex items-center justify-between rounded-lg border p-4"
                 >
                   <div>
                     <p className="font-medium">{invite.email}</p>
                     <p className="text-xs text-muted-foreground">
-                      Invited {invite.invitedAt} · {invite.role}
+                      {invite.role || "member"}
                     </p>
                   </div>
                   <div className="flex gap-2">

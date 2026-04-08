@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -12,6 +13,7 @@ import {
   Users,
   Settings2,
   Check,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +22,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { getTemplates, getGalleryTemplates, seedGalleryTemplates } from "@/lib/actions/templates";
+import { getRecipientLists } from "@/lib/actions/recipients";
+import { createCampaign, sendCampaign } from "@/lib/actions/campaigns";
 
 const steps = [
   { id: 1, label: "Template", icon: FileText },
@@ -28,17 +33,153 @@ const steps = [
   { id: 4, label: "Review & Send", icon: Send },
 ];
 
-const templates = [
-  { id: "1", name: "Product Launch", description: "Clean, modern layout for product announcements" },
-  { id: "2", name: "Newsletter", description: "Multi-section layout for monthly updates" },
-  { id: "3", name: "Event Invite", description: "CTA-focused layout for webinars & events" },
-  { id: "4", name: "Welcome Email", description: "Onboarding email for new users" },
-  { id: "5", name: "Plain Text", description: "Simple text-based email, no frills" },
-];
+type Template = {
+  id: string;
+  name: string;
+  subject: string;
+  contentHtml: string | null;
+  contentJson: unknown;
+};
+
+type RecipientList = {
+  id: string;
+  name: string;
+  description: string | null;
+  totalCount: number;
+  activeCount: number;
+};
 
 export default function NewCampaignPage() {
+  const router = useRouter();
   const [currentStep, setCurrentStep] = useState(1);
-  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+
+  // Template state
+  const [galleryTemplates, setGalleryTemplates] = useState<Template[]>([]);
+  const [customTemplates, setCustomTemplates] = useState<Template[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+
+  // Recipients state
+  const [recipientLists, setRecipientLists] = useState<RecipientList[]>([]);
+  const [selectedListIds, setSelectedListIds] = useState<string[]>([]);
+  const [pasteEmails, setPasteEmails] = useState("");
+
+  // Settings state
+  const [campaignName, setCampaignName] = useState("");
+  const [subject, setSubject] = useState("");
+  const [previewText, setPreviewText] = useState("");
+  const [fromName, setFromName] = useState("");
+  const [fromEmail, setFromEmail] = useState("");
+  const [replyTo, setReplyTo] = useState("");
+  const [tags, setTags] = useState("");
+
+  useEffect(() => {
+    async function load() {
+      try {
+        await seedGalleryTemplates();
+        const [gallery, custom, lists] = await Promise.all([
+          getGalleryTemplates(),
+          getTemplates(),
+          getRecipientLists(),
+        ]);
+        setGalleryTemplates(gallery as Template[]);
+        setCustomTemplates(custom as Template[]);
+        setRecipientLists(lists as RecipientList[]);
+      } catch (err) {
+        console.error("Failed to load data:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
+
+  const allTemplates = [...galleryTemplates, ...customTemplates];
+  const selectedTemplate = allTemplates.find((t) => t.id === selectedTemplateId);
+
+  const totalRecipients = selectedListIds.reduce((sum, id) => {
+    const list = recipientLists.find((l) => l.id === id);
+    return sum + (list?.activeCount || 0);
+  }, 0);
+
+  const toggleList = (id: string) => {
+    setSelectedListIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const handleSend = async () => {
+    if (!selectedTemplateId || selectedListIds.length === 0 || !campaignName || !subject || !fromName || !fromEmail) {
+      alert("Please fill in all required fields.");
+      return;
+    }
+
+    setSending(true);
+    try {
+      const campaign = await createCampaign({
+        name: campaignName,
+        subject,
+        previewText: previewText || undefined,
+        templateId: selectedTemplateId,
+        contentHtml: selectedTemplate?.contentHtml || undefined,
+        contentJson: selectedTemplate?.contentJson || undefined,
+        fromName,
+        fromEmail,
+        replyTo: replyTo || undefined,
+        tags: tags ? tags.split(",").map((t) => t.trim()) : [],
+        recipientListIds: selectedListIds,
+      });
+
+      // Send immediately
+      await sendCampaign(campaign.id);
+      router.push(`/campaigns/${campaign.id}`);
+    } catch (err) {
+      console.error("Failed to send campaign:", err);
+      alert("Failed to send campaign. Please try again.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    if (!campaignName || !subject || !fromName || !fromEmail) {
+      alert("Please fill in campaign name, subject, from name, and from email.");
+      return;
+    }
+
+    setSending(true);
+    try {
+      const campaign = await createCampaign({
+        name: campaignName,
+        subject,
+        previewText: previewText || undefined,
+        templateId: selectedTemplateId || undefined,
+        contentHtml: selectedTemplate?.contentHtml || undefined,
+        contentJson: selectedTemplate?.contentJson || undefined,
+        fromName,
+        fromEmail,
+        replyTo: replyTo || undefined,
+        tags: tags ? tags.split(",").map((t) => t.trim()) : [],
+        recipientListIds: selectedListIds,
+      });
+
+      router.push(`/campaigns/${campaign.id}`);
+    } catch (err) {
+      console.error("Failed to save draft:", err);
+      alert("Failed to save draft.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -93,27 +234,45 @@ export default function NewCampaignPage() {
               <CardTitle>Choose a Template</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {templates.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => setSelectedTemplate(t.id)}
-                    className={`rounded-lg border p-4 text-left transition-colors hover:border-primary ${
-                      selectedTemplate === t.id
-                        ? "border-primary ring-2 ring-primary/20"
-                        : ""
-                    }`}
-                  >
-                    <div className="mb-3 flex h-32 items-center justify-center rounded-md bg-muted">
-                      <FileText className="h-8 w-8 text-muted-foreground" />
-                    </div>
-                    <p className="font-medium">{t.name}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {t.description}
-                    </p>
-                  </button>
-                ))}
-              </div>
+              {allTemplates.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <FileText className="mb-3 h-8 w-8 text-muted-foreground" />
+                  <p className="font-medium">No templates available</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Create a template first in the Templates section.
+                  </p>
+                  <Link href="/templates">
+                    <Button variant="outline" className="mt-4">
+                      Go to Templates
+                    </Button>
+                  </Link>
+                </div>
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {allTemplates.map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => {
+                        setSelectedTemplateId(t.id);
+                        if (!subject && t.subject) setSubject(t.subject);
+                      }}
+                      className={`rounded-lg border p-4 text-left transition-colors hover:border-primary ${
+                        selectedTemplateId === t.id
+                          ? "border-primary ring-2 ring-primary/20"
+                          : ""
+                      }`}
+                    >
+                      <div className="mb-3 flex h-32 items-center justify-center rounded-md bg-muted">
+                        <FileText className="h-8 w-8 text-muted-foreground" />
+                      </div>
+                      <p className="font-medium">{t.name}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t.subject || "No subject set"}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -124,71 +283,72 @@ export default function NewCampaignPage() {
         <div className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>Add Recipients</CardTitle>
+              <CardTitle>Select Recipients</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              {/* CSV Upload */}
-              <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8">
-                <Upload className="mb-3 h-8 w-8 text-muted-foreground" />
-                <p className="font-medium">Upload CSV file</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  CSV must contain an &ldquo;email&rdquo; column. Optional: first_name,
-                  last_name, company.
-                </p>
-                <Button variant="outline" className="mt-4">
-                  Choose File
-                </Button>
-              </div>
-
-              <div className="flex items-center gap-4">
-                <Separator className="flex-1" />
-                <span className="text-sm text-muted-foreground">or</span>
-                <Separator className="flex-1" />
-              </div>
-
-              {/* Manual paste */}
+              {/* Select existing lists */}
               <div className="space-y-2">
-                <Label>Paste email addresses</Label>
-                <Textarea
-                  placeholder="john@company.com&#10;priya@infosys.com&#10;rahul@tata.com"
-                  rows={6}
-                />
-                <p className="text-xs text-muted-foreground">
-                  One email per line. Organisation will be auto-detected from
-                  the domain.
-                </p>
-              </div>
-
-              {/* Or select existing list */}
-              <div className="space-y-2">
-                <Label>Or select an existing list</Label>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {["Enterprise Leads", "Newsletter Subscribers"].map(
-                    (list) => (
+                <Label>Select recipient lists</Label>
+                {recipientLists.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8">
+                    <Users className="mb-3 h-8 w-8 text-muted-foreground" />
+                    <p className="font-medium">No recipient lists yet</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Create a recipient list first.
+                    </p>
+                    <Link href="/recipients">
+                      <Button variant="outline" className="mt-4">
+                        Go to Recipients
+                      </Button>
+                    </Link>
+                  </div>
+                ) : (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {recipientLists.map((list) => (
                       <button
-                        key={list}
-                        className="rounded-lg border p-3 text-left hover:border-primary"
+                        key={list.id}
+                        onClick={() => toggleList(list.id)}
+                        className={`rounded-lg border p-3 text-left hover:border-primary ${
+                          selectedListIds.includes(list.id)
+                            ? "border-primary ring-2 ring-primary/20"
+                            : ""
+                        }`}
                       >
-                        <p className="font-medium">{list}</p>
+                        <div className="flex items-center justify-between">
+                          <p className="font-medium">{list.name}</p>
+                          {selectedListIds.includes(list.id) && (
+                            <Check className="h-4 w-4 text-primary" />
+                          )}
+                        </div>
                         <p className="text-xs text-muted-foreground">
-                          {list === "Enterprise Leads" ? "1,240" : "4,580"}{" "}
-                          recipients
+                          {list.activeCount.toLocaleString()} active recipients
                         </p>
                       </button>
-                    )
-                  )}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Preview */}
               <div className="rounded-lg bg-muted p-4">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-medium">Recipients Preview</p>
-                  <Badge variant="secondary">0 recipients</Badge>
+                  <Badge variant="secondary">
+                    {totalRecipients.toLocaleString()} recipients
+                  </Badge>
                 </div>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Upload a CSV or paste emails to see a preview
-                </p>
+                {selectedListIds.length > 0 ? (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Selected {selectedListIds.length} list{selectedListIds.length > 1 ? "s" : ""}:{" "}
+                    {selectedListIds
+                      .map((id) => recipientLists.find((l) => l.id === id)?.name)
+                      .join(", ")}
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Select one or more lists above
+                  </p>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -205,17 +365,21 @@ export default function NewCampaignPage() {
             <CardContent className="space-y-6">
               <div className="grid gap-6 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="campaignName">Campaign Name</Label>
+                  <Label htmlFor="campaignName">Campaign Name *</Label>
                   <Input
                     id="campaignName"
                     placeholder="e.g., Q2 Product Launch"
+                    value={campaignName}
+                    onChange={(e) => setCampaignName(e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="subject">Subject Line</Label>
+                  <Label htmlFor="subject">Subject Line *</Label>
                   <Input
                     id="subject"
                     placeholder="e.g., Introducing our new feature"
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
@@ -223,18 +387,27 @@ export default function NewCampaignPage() {
                   <Input
                     id="previewText"
                     placeholder="Text shown in inbox preview"
+                    value={previewText}
+                    onChange={(e) => setPreviewText(e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="fromName">From Name</Label>
-                  <Input id="fromName" placeholder="e.g., Varun from Skcript" />
+                  <Label htmlFor="fromName">From Name *</Label>
+                  <Input
+                    id="fromName"
+                    placeholder="e.g., Varun from Skcript"
+                    value={fromName}
+                    onChange={(e) => setFromName(e.target.value)}
+                  />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="fromEmail">From Email</Label>
+                  <Label htmlFor="fromEmail">From Email *</Label>
                   <Input
                     id="fromEmail"
                     type="email"
                     placeholder="hello@skcript.com"
+                    value={fromEmail}
+                    onChange={(e) => setFromEmail(e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
@@ -243,6 +416,8 @@ export default function NewCampaignPage() {
                     id="replyTo"
                     type="email"
                     placeholder="support@skcript.com"
+                    value={replyTo}
+                    onChange={(e) => setReplyTo(e.target.value)}
                   />
                 </div>
               </div>
@@ -251,7 +426,11 @@ export default function NewCampaignPage() {
 
               <div className="space-y-2">
                 <Label>Tags</Label>
-                <Input placeholder="Add tags (comma separated)" />
+                <Input
+                  placeholder="Add tags (comma separated)"
+                  value={tags}
+                  onChange={(e) => setTags(e.target.value)}
+                />
               </div>
             </CardContent>
           </Card>
@@ -272,19 +451,23 @@ export default function NewCampaignPage() {
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Name</span>
-                      <span>Q2 Product Launch</span>
+                      <span>{campaignName || "—"}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Subject</span>
-                      <span>Introducing our new feature</span>
+                      <span>{subject || "—"}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">From</span>
-                      <span>Varun from Skcript</span>
+                      <span>{fromName || "—"}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Template</span>
+                      <span>{selectedTemplate?.name || "—"}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Recipients</span>
-                      <span>2,400</span>
+                      <span>{totalRecipients.toLocaleString()}</span>
                     </div>
                   </div>
                 </div>
@@ -311,11 +494,21 @@ export default function NewCampaignPage() {
               <Separator />
 
               <div className="flex items-center gap-4">
-                <Button className="flex-1">
-                  <Send className="mr-2 h-4 w-4" /> Send Now
+                <Button className="flex-1" onClick={handleSend} disabled={sending}>
+                  {sending ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="mr-2 h-4 w-4" />
+                  )}
+                  {sending ? "Sending..." : "Send Now"}
                 </Button>
-                <Button variant="outline" className="flex-1">
-                  <Calendar className="mr-2 h-4 w-4" /> Schedule
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={handleSaveDraft}
+                  disabled={sending}
+                >
+                  <Calendar className="mr-2 h-4 w-4" /> Save as Draft
                 </Button>
               </div>
             </CardContent>

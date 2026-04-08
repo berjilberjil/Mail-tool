@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { organization } from "@/lib/auth-client";
+import { ensureOrgRecord } from "@/lib/actions/team";
 
 export default function OnboardingSetupPage() {
   const router = useRouter();
@@ -34,6 +35,13 @@ export default function OnboardingSetupPage() {
       setError(orgError.message || "Failed to create organisation.");
       setLoading(false);
       return;
+    }
+
+    // Create extended org record with billing fields
+    try {
+      await ensureOrgRecord();
+    } catch {
+      // Non-critical - org record will be created on first dashboard load
     }
 
     router.push("/dashboard");
